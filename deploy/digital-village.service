@@ -1,0 +1,21 @@
+[Unit]
+Description=Digital Village - Erasmus+ multiplayer teaching game
+Documentation=https://github.com/Anahiell/DigitalVilage
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=robot
+Group=robot
+WorkingDirectory=/home/robot/projects/DigitalVilage
+EnvironmentFile=/home/robot/projects/DigitalVilage/.env
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
