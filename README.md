@@ -30,6 +30,32 @@ Requires **Node.js 22.13 or newer** (SQLite is an experimental built-in API in N
 
 Install `nodemailer` when real Gmail SMTP is configured: `npm install` (it's an optional dependency). Set `SMTP_EMAIL` and `SMTP_APP_PASSWORD` with a **separate Gmail account** protected by two-step verification and a Google app password. Never store these details in the browser. Test delivery with a single recipient before inviting 30 people. Sending with consumer Gmail can be restricted or delayed; be prepared to issue an emergency PIN. **PUBLIC_BASE_URL** must be the externally reachable HTTPS address used in your messages.
 
+## Public deployment with Railway (persistent storage)
+
+The app runs on a **single long-lived Node instance**, not a Vercel serverless function. Use the supplied `Dockerfile` (Node 22, no compilation/build step) to deploy the GitHub repository as a Railway service or an equivalent container host. Attach a **persistent volume mounted at `/data`** before any participants register. The SQLite database is stored at `/data/village.db`. Use **one replica only** (multiple app processes cannot safely share SQLite database traffic via a network volume).
+
+Set these secrets in the hosting provider's **environment variables**, never in Git or a chat message:
+
+| Variable | Value |
+|---|---|
+| `ADMIN_PASSWORD` | Random secret of at least 14 characters |
+| `PIN_PEPPER` | Independent random secret of at least 20 characters; changing it invalidates PINs |
+| `HOST` | `0.0.0.0` |
+| `DB_PATH` | `/data/village.db` (mount persistent storage at `/data`) |
+| `DEV_EMAIL_OUTBOX` | `0` (never show generated PINs in a publicly accessible outbox) |
+| `NODE_ENV` | `production` |
+| `PUBLIC_BASE_URL` | Public `https://...` URL once provisioned |
+| `PRIVACY_CONTACT` | Genuine organiser privacy contact before participant registration |
+| `SMTP_EMAIL` / `SMTP_APP_PASSWORD` | Dedicated real Gmail address / Google app password once configured |
+
+Configure your host to check `GET /healthz`. Verify `https://<generated-public-domain>/healthz` and `/api/state` before sharing the QR code. Without SMTP, registration deliberately returns 503 rather than creating unusable player accounts. Never activate `DEV_EMAIL_OUTBOX=1` on the public service. With SMTP active, send **one test PIN** and verify delivery before opening registration to 30 people. The app intentionally blocks unauthorised admin actions and uses HTTP-only session cookies.
+
+**Deploy checklist:** GitHub connected → build with Dockerfile → one replica → persistent volume `/data` → environment secrets → HTTPS domain → SMTP delivery test → rehearsal with 30 clients → backup and recover volume → verify data deletion process with organisers. For rehearsal, avoid real participant personal data until privacy/consent wording is confirmed.
+
+### Automated load check
+
+`npm run load-test` simulates 30 distinct users behind the **same public IP**: simultaneous role reservations, PIN logins, polling waves, economy update, investment, grant and all five rounds. This uses a temporary local database and simulated outbox (no real emails or participant data), then cleans up. It does **not** prove external hosting or venue Wi-Fi performance; repeat a separate test against the deployed service before the workshop, only with approved synthetic accounts.
+
 ## Connectivity / Raspberry Pi 5
 
 This build uses a persistent Node process and a local SQLite database — it **cannot run as a static Vercel site or as serverless Vercel functions with durable SQLite storage**. For a local pilot you can host it on a Pi 5 or laptop, bind `HOST=0.0.0.0`, and connect all phones to the same trusted local Wi-Fi network. Test the client-isolation setting of the venue access point in advance. Guests must be able to connect to the host. Use HTTPS with a reverse proxy for real email/PIN sign-ins; do not send participant credentials in cleartext over a shared network. For remote public deployment choose a reliable always-on host with a persistent disk, HTTPS, automatic restart, and database backups, or migrate the data layer to a managed PostgreSQL service.

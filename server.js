@@ -1,7 +1,7 @@
 import {createServer} from 'node:http';
 import {readFile, mkdir} from 'node:fs/promises';
 import {existsSync, mkdirSync} from 'node:fs';
-import {join, extname, resolve} from 'node:path';
+import {join, extname, resolve, dirname} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {randomBytes, randomInt, scryptSync, createHash, timingSafeEqual} from 'node:crypto';
 import {VILLAGES,ROLES,INVESTMENTS,ROUNDS,MEDIA_ASSETS,NEWS_TEMPLATES,FESTIVAL_TASKS} from './data.js';
@@ -18,8 +18,9 @@ function throttle(req,group,max,windowMs){
  recent.push(now);ipBuckets.set(key,recent);
  if(ipBuckets.size>2000)for(const [k,v] of ipBuckets)if(v.every(t=>now-t>3600000))ipBuckets.delete(k);
 }
-const DB_DIR=join(ROOT,'storage'); mkdirSync(DB_DIR,{recursive:true});
-const db=new DatabaseSync(process.env.DB_PATH||join(DB_DIR,'village.db'));
+const DB_PATH=process.env.DB_PATH||join(ROOT,'storage','village.db');
+mkdirSync(dirname(DB_PATH),{recursive:true});
+const db=new DatabaseSync(DB_PATH);
 db.exec('PRAGMA journal_mode=WAL;PRAGMA foreign_keys=ON;PRAGMA busy_timeout=5000;');
 db.exec(`
 CREATE TABLE IF NOT EXISTS game (
@@ -101,7 +102,7 @@ function verifyPin(pin,stored){const [salt,hash]=(stored||'').split(':');if(!sal
 function generatePin(){for(let i=0;i<30;i++){const pin=String(randomInt(100000,1000000)),fingerprint=sha(PIN_PEPPER+pin);if(!row('SELECT id FROM players WHERE pin_lookup=?',fingerprint)) return {pin,fingerprint};}throw httpError(503,'Could not generate PIN');}
 function parseCookie(req){const raw=req.headers.cookie||'';const m=raw.match(/(?:^|;\s*)dv_session=([a-f0-9]{64})/);return m?.[1]||'';}
 function auth(req){const t=parseCookie(req);if(!t)return null;const s=row('SELECT * FROM sessions WHERE token_hash=? AND expires_at>?',sha(t),at());if(!s)return null;if(s.admin)return {admin:true};const player=row('SELECT id,name,email,village_id,role,verified,consent_email FROM players WHERE id=?',s.player_id);return player?{admin:false,player}:null;}
-function cookie(token,req){const secure=(process.env.TRUST_PROXY==='1'&&req.headers['x-forwarded-proto']==='https')||req.socket.encrypted;return `dv_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Number(process.env.SESSION_DAYS||2)*86400}${secure?'; Secure':''}`;}
+function cookie(token,req){const secure=(process.env.PUBLIC_BASE_URL||'').startsWith('https://')||(process.env.TRUST_PROXY==='1'&&req.headers['x-forwarded-proto']==='https')||req.socket.encrypted;return `dv_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Number(process.env.SESSION_DAYS||2)*86400}${secure?'; Secure':''}`;}
 function startSession(res,req,playerId=null,admin=false){const token=randomBytes(32).toString('hex');run('INSERT INTO sessions VALUES(?,?,?,?)',sha(token),playerId,admin?1:0,at()+Number(process.env.SESSION_DAYS||2)*86400000);res.setHeader('Set-Cookie',cookie(token,req));}
 function requirePlayer(a){if(!a||a.admin||!a.player)throw httpError(401,'Please sign in');return a.player;}
 function requireAdmin(a){if(!a?.admin)throw httpError(403,'Host access required');}
@@ -308,6 +309,7 @@ async function bodyJson(req){let s='';for await(const chunk of req){s+=chunk;if(
 const mime={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.ico':'image/x-icon'};
 async function handler(req,res){try{
  const url=new URL(req.url,'http://localhost'),path=url.pathname;
+ if(req.method==='GET'&&path==='/healthz')return json(res,200,{ok:!!row('SELECT id FROM game WHERE id=1')});
  res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Frame-Options','DENY');
  if(path.startsWith('/api/')){
   const a=auth(req);
@@ -315,8 +317,8 @@ async function handler(req,res){try{
   if(req.method!=='POST')throw httpError(405,'Method not allowed');
   const origin=req.headers.origin;if(origin){const o=new URL(origin);const expected=(process.env.PUBLIC_BASE_URL?new URL(process.env.PUBLIC_BASE_URL).host:req.headers.host);if(o.host!==expected)throw httpError(403,'Invalid request origin');}
   const b=await bodyJson(req);
-  if(path==='/api/register'){throttle(req,'register',12,3600000);return json(res,200,await register(b));}
-  if(path==='/api/login'){throttle(req,'login',30,900000);return json(res,200,login(b.email,b.pin,res,req));}
+  if(path==='/api/register'){throttle(req,'register',80,3600000);return json(res,200,await register(b));}
+  if(path==='/api/login'){throttle(req,'login',300,900000);return json(res,200,login(b.email,b.pin,res,req));}
   if(path==='/api/admin/login'){
    throttle(req,'admin',6,900000);
    const inp=Buffer.from(clean(b.password)),exp=Buffer.from(ADMIN_PASSWORD);
@@ -340,7 +342,7 @@ async function handler(req,res){try{
    return json(res,200,{ok:true,pin,email:p.email});
   }
   if(path==='/api/resend'){
-   throttle(req,'resend',6,900000);const email=clean(b.email).toLowerCase();const p=row('SELECT * FROM players WHERE email=?',email);
+   throttle(req,'resend',50,900000);const email=clean(b.email).toLowerCase();const p=row('SELECT * FROM players WHERE email=?',email);
    if(p&&at()-p.pin_sent_at>90000){
     const pin=tx(()=>newPin(p.id));
     const sent=await sendEmail(p.email,'Your Digital Village login PIN',`Your new Digital Village login PIN is ${pin}. Keep it private.`);

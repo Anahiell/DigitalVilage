@@ -4,11 +4,16 @@
   "private": true,
   "description": "Digital Village — live multiplayer Erasmus+ educational simulation",
   "type": "module",
-  "engines": {"node": ">=22.13.0"},
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
     "start": "node --env-file-if-exists=.env server.js",
     "dev": "node --env-file-if-exists=.env --watch server.js",
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "load-test": "node tests/load.mjs"
   },
-  "optionalDependencies": {"nodemailer": "^6.10.1"}
+  "optionalDependencies": {
+    "nodemailer": "^6.10.1"
+  }
 }
