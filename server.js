@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS game (
  elapsed_ms INTEGER NOT NULL DEFAULT 0, last_sim_at INTEGER NOT NULL DEFAULT 0,
  crisis_fired INTEGER NOT NULL DEFAULT 0, tickets_fired INTEGER NOT NULL DEFAULT 0,
  news_revealed INTEGER NOT NULL DEFAULT 0, media_revealed INTEGER NOT NULL DEFAULT 0,
- festival_resolved INTEGER NOT NULL DEFAULT 0, security_sent INTEGER NOT NULL DEFAULT 0
+ festival_resolved INTEGER NOT NULL DEFAULT 0, security_sent INTEGER NOT NULL DEFAULT 0,
+ last_dynamic_event_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS villages (
  id TEXT PRIMARY KEY,name TEXT NOT NULL,emoji TEXT NOT NULL,description TEXT NOT NULL,
@@ -111,10 +112,27 @@ function roundElapsed(g,now=at()){return g.phase==='playing'?Math.max(0,now-g.st
 function getGame(){return row('SELECT * FROM game WHERE id=1');}
 function recordBaseline(round){for(const v of all('SELECT * FROM villages'))snapshot(v,round,at());}
 function addTasks(type){FESTIVAL_TASKS.filter(t=>t.type===type).forEach((t,i)=>{for(const v of VILLAGES){const id=`${v.id}-${type}-${i}`;run('INSERT OR IGNORE INTO tasks(id,village_id,title,type,required_role,minutes,description) VALUES (?,?,?,?,?,?,?)',id,v.id,t.title,t.type,t.role,t.minutes,t.description);}});}
+const RANDOM_EVENTS=[
+ {title:'A local investor backs rural startups',details:'New investment and job opportunities attract young residents.',budget:4400,jobs:3,youth:1,trust:1},
+ {title:'Heavy rain damages broadband equipment',details:'Temporary repairs cost money and lower connectivity.',budget:-2200,internet:-7,trust:-1},
+ {title:'Youth exchange programme opens',details:'Digital training brings new opportunities and young residents.',education:4,youth:3,trust:1},
+ {title:'A small business moves away',details:'The local economy loses some jobs and young workers.',jobs:-4,youth:-2,trust:-2},
+ {title:'Weekend visitors discover the village',details:'Tourism brings new revenue and interest in the village.',budget:3200,youth:2,trust:1},
+ {title:'Volunteers revitalise a community space',details:'Community effort improves public services and trust.',services:4,trust:3}
+];
+function spontaneousEvent(g,now){
+ const village=VILLAGES[randomInt(VILLAGES.length)];const event=RANDOM_EVENTS[randomInt(RANDOM_EVENTS.length)];
+ const changes=['budget','youth','trust','internet','education','services','jobs'];
+ const sets=changes.filter(k=>event[k]!==undefined).map(k=>{const min=k==='youth'?25:0,max=k==='budget'?100000000:k==='youth'?100000:100;return `${k}=MAX(${min},MIN(${max},${k}+${Number(event[k])}))`});
+ run(`UPDATE villages SET ${sets.join(', ')} WHERE id=?`,village.id);
+ logEvent(g.round,village.id,'random',event.title,event.details);
+ run('UPDATE game SET last_dynamic_event_at=? WHERE id=1',now);
+ snapshot(row('SELECT * FROM villages WHERE id=?',village.id),g.round,now);
+}
 function applyCrisis(g){for(const v of all('SELECT * FROM villages')){const cut=Math.round(v.budget*.30);run('UPDATE villages SET budget=MAX(0,budget-?) WHERE id=?',cut,v.id);logEvent(g.round,v.id,'shock','Regional funding cut by 30%',`Budget reduced by €${cut.toLocaleString('en-US')}.`);}run('UPDATE game SET crisis_fired=1 WHERE id=1');}
 function advanceWorld(){let g=getGame();if(g.phase!=='playing')return;
  const now=at(),n=Math.min(360,Math.floor(Math.max(0,now-g.last_sim_at)/10000)),elapsed=roundElapsed(g,now);
- if(!n && !(g.round===1&&!g.crisis_fired&&elapsed>=600000) && !(g.round===4&&!g.tickets_fired&&elapsed>=240000))return;
+ if(!n && !(g.round===1&&!g.crisis_fired&&elapsed>=600000) && !(g.round===4&&!g.tickets_fired&&elapsed>=240000) && !(g.round<=4&&now-g.last_dynamic_event_at>=120000))return;
  tx(()=>{
  g=getGame();if(g.phase!=='playing')return;
  const nt=Math.min(360,Math.floor(Math.max(0,now-g.last_sim_at)/10000));
@@ -143,6 +161,7 @@ function advanceWorld(){let g=getGame();if(g.phase!=='playing')return;
  if(nt)run('UPDATE game SET last_sim_at=? WHERE id=1',g.last_sim_at+nt*10000);
  if(g.round===1&&!g.crisis_fired&&elapsed>=600000)applyCrisis(g);
  if(g.round===4&&!g.tickets_fired&&elapsed>=240000){addTasks('red');run('UPDATE game SET tickets_fired=1 WHERE id=1');logEvent(4,null,'crisis','Emergency alerts: pipe failure and speaker cancellation','Critical tickets have arrived. Assign the right people to solve them.');}
+ if(g.round<=4&&now-g.last_dynamic_event_at>=120000)spontaneousEvent(g,now);
  });
 }
 async function sendEmail(to,subject,body){if(process.env.SMTP_EMAIL&&process.env.SMTP_APP_PASSWORD){
@@ -217,7 +236,7 @@ async function doAction(a,body){const op=clean(body.op),g=getGame(),p=a?.player;
    if(op==='next'&&g.round===3&&!g.media_revealed)resolveMedia();
    if(op==='next'&&g.round===4&&!g.festival_resolved)resolveFestival();
    const next=g.round+1;
-   run("UPDATE game SET round=?,phase='playing',started_at=?,elapsed_ms=0,last_sim_at=?,crisis_fired=0,tickets_fired=0 WHERE id=1",next,at(),at());
+   run("UPDATE game SET round=?,phase='playing',started_at=?,elapsed_ms=0,last_sim_at=?,crisis_fired=0,tickets_fired=0,last_dynamic_event_at=? WHERE id=1",next,at(),at(),at());
    if(next===4)addTasks('blue');
    logEvent(next,null,'round',`Round ${next} started`,ROUNDS[next-1].name);recordBaseline(next);
    if(next===5){const consent=all('SELECT name,email FROM players WHERE verified=1 AND consent_email=1');for(const x of consent){await sendEmail(x.email,'Important: Digital Village account notification',`Hello ${x.name},\n\nA new security message is waiting for you. Review it here: ${process.env.PUBLIC_BASE_URL||'http://localhost:'+PORT}/?security=1\n\nThis is part of the consented Digital Village educational security simulation. No passwords will be requested.`);}run('UPDATE game SET security_sent=1 WHERE id=1');}
@@ -311,7 +330,7 @@ async function handler(req,res){try{
    if(b.confirm!=='DELETE ALL PLAYER DATA')throw httpError(400,'Confirmation mismatch');
    const got=Buffer.from(clean(b.password)),expected=Buffer.from(ADMIN_PASSWORD);
    if(got.length!==expected.length||!timingSafeEqual(got,expected))throw httpError(403,'Host password is incorrect');
-   tx(()=>{for(const table of ['news_choices','posts','tasks','investments','snapshots','events','outbox','sessions','players'])run(`DELETE FROM ${table}`);for(const v of VILLAGES)run('UPDATE villages SET budget=?,youth=?,internet=?,education=?,services=?,jobs=?,trust=? WHERE id=?',v.budget,v.youth,v.internet,v.education,v.services,v.jobs,v.trust,v.id);run("UPDATE game SET round=0,phase='waiting',started_at=0,elapsed_ms=0,last_sim_at=0,crisis_fired=0,tickets_fired=0,news_revealed=0,media_revealed=0,festival_resolved=0,security_sent=0 WHERE id=1");});
+   tx(()=>{for(const table of ['news_choices','posts','tasks','investments','snapshots','events','outbox','sessions','players'])run(`DELETE FROM ${table}`);for(const v of VILLAGES)run('UPDATE villages SET budget=?,youth=?,internet=?,education=?,services=?,jobs=?,trust=? WHERE id=?',v.budget,v.youth,v.internet,v.education,v.services,v.jobs,v.trust,v.id);run("UPDATE game SET round=0,phase='waiting',started_at=0,elapsed_ms=0,last_sim_at=0,crisis_fired=0,tickets_fired=0,news_revealed=0,media_revealed=0,festival_resolved=0,security_sent=0,last_dynamic_event_at=0 WHERE id=1");});
    res.setHeader('Set-Cookie','dv_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
    return json(res,200,{ok:true});
   }

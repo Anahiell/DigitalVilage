@@ -10,6 +10,7 @@ A mobile-first, real-time educational multiplayer strategy for the **RURALEM / E
 - **Identity**: random unique six-digit PIN emailed on registration; PIN hash and private HTTP-only session; wrong-PIN lockout; rate limits; resend cooldown; host-only emergency PIN reset; restoration after browser refresh.
 - **World**: budgets, youth population, employment, internet, education, services, trust; income and upkeep; attractiveness and migration; time-series snapshots **every 10 real seconds**; charts rendered directly from history rather than predefined animation frames.
 - **Round 1**: five investments, persistent budgets, one-time 30% funding crisis at minute 10 or on host command.
+- **Living-world incidents**: server-selected favourable or challenging events every two minutes during rounds 1–4 (regional investments, broadband damage, exchange students, employers leaving, tourism, volunteers). Players see breaking-news banners; effects are saved in the economy and its charts.
 - **Round 2**: seven articles per village, real/fake variants, signatures and seals, team selections, host reveal, real effects on youth and trust.
 - **Round 3**: responsive mobile content editor, ten creative assets, campaign preview, deliberate licensing traps, host reveal and penalties/rewards.
 - **Round 4**: multi-user festival board; progress increases server-side; assigning to relevant roles is faster; helping tasks; timed arrival of urgent tickets; simulated festival outcome and impact.

@@ -40,6 +40,10 @@ test('complete simulation: private accounts, roles, dynamic economy and five rou
  s=(await request('state',undefined,alice)).json;assert.ok(s.villages[0].budget>88000);
  assert.equal((await request('action',{op:'shock'},admin)).status,200);
  s=(await request('state',undefined,alice)).json;assert.equal(s.game.crisisFired,true);assert.ok(s.villages[0].budget<70000);
+ db.exec('UPDATE game SET last_dynamic_event_at=last_dynamic_event_at-130000 WHERE id=1');
+ s=(await request('state',undefined,alice)).json;assert.ok(s.events.some(e=>e.kind==='random'));
+ const randomCount=s.events.filter(e=>e.kind==='random').length;
+ s=(await request('state',undefined,alice)).json;assert.equal(s.events.filter(e=>e.kind==='random').length,randomCount);
  assert.equal((await request('action',{op:'next'},admin)).status,200);
  s=(await request('state',undefined,alice)).json;assert.equal(s.game.round,2);assert.equal(s.news.length,28);assert.ok(!('authentic' in s.news[0]));
  assert.equal((await request('action',{op:'chooseNews',id:'riverstone-n5'},alice)).status,200);
