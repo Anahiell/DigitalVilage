@@ -14,6 +14,6 @@
     "load-test": "node tests/load.mjs"
   },
   "optionalDependencies": {
-    "nodemailer": "^6.10.1"
+    "nodemailer": "^10.1.2"
   }
 }
