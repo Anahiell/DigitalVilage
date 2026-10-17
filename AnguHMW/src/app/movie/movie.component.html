@@ -1,9 +1,0 @@
-
-<input type="text" [(ngModel)]="searchTitle" placeholder="Введите название фильма">
-<button (click)="searchMovieByTitle(searchTitle)">Поиск</button>
-
-<div *ngIf="movieInfo">
-  <h2>{{ movieInfo.Title }}</h2>
-  <p>Год: {{ movieInfo.Year }}</p>
-  <p>Сюжет: {{ movieInfo.Plot }}</p>
-</div>
