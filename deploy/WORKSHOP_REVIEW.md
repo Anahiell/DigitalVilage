@@ -1,27 +1,33 @@
 # Workshop readiness review — 18 October 2026
 
-The five-round simulation is implemented. This review focused on participant entry, host control and recovery during an actual workshop.
+This update reviews the complete five-round experience and prepares the existing Raspberry Pi installation. No physical Pi, domain account or real recipient mailbox was accessed. Code preparation and local verification must be distinguished from the final on-device rehearsal.
 
-| Finding | Implemented correction |
-| --- | --- |
-| Resend reported success during cooldown or after SMTP failure. | Explicit 429 countdown/`Retry-After`, actionable 503 errors, persistent form feedback. |
-| Replacing a PIN could invalidate the old code before mail succeeded. | Commit the replacement only after SMTP accepts it; serialize recovery requests per account. |
-| Selecting a village or polling could clear a form. | Preserve registration, content and grant drafts; prefill the login email; prevent polling from replacing a pending submission. |
-| The QR dependency existed without an invitation feature. | Host and waiting-room projector render a locally generated QR for the configured public URL, plus a copyable link. |
-| Lost connections left a misleading live display. | Show cached-state/reconnection status and automatically recover the existing session. |
-| A long outage could advance the economy on return. | Recover an active game paused at the last saved tick; preserve incident timing across pauses. |
-| There was no usable finish control or frozen outcome screen. | Add host finish, actual per-village outcomes and projector results; reject economic changes and round advancement after finish. |
-| Some player permissions differed between UI and API. | Match newsroom/content permissions, including the Culture Ambassador; disable unavailable host/player actions. |
-| Purchases were inferred from only the latest 24 events. | Read completed projects from the persistent investments table. |
-| The page policy blocked dynamic indicator styles. | Permit style attributes while keeping scripts restricted to same-origin files; verify actual indicator widths in the browser. |
+## Fixed and completed
+
+| Area | Result |
+|---|---|
+| World and deadlines | Server clock advances independently of browser polling. Round deadlines close into a frozen review phase; discussion no longer keeps charging the economy. |
+| Funding crisis | One 30% cut of current budgets, correct timed trigger, saved exact losses, immediate chart history, no duplicate manual cut. |
+| News | 28 generated articles tied to real closing data, random IDs/order/seals, source bulletins, four facts/three fabrications per village, deliberate copied-seal fact-checking case, verdict explanations. |
+| Campaigns | Usage conditions, actual required CC BY attribution and visible credits. Optimistic version checking preserves a stale draft instead of overwriting another councillor's publication. |
+| Festival | Stable workload calculation, correct role speed, self-help rejected, team-help cooldown, urgent tickets inserted once, success requires all six tasks. |
+| Security | Four saved practical answers per participant, explanations after close, trust outcome adjusted for the full possible participation. |
+| Reports | Immutable per-round metrics/deltas, real names/positions, decisions/incidents and factual stories. Archive and projector support; whole-workshop story at finish. |
+| Interface | Automatic round navigation, persistent disclosure panels/drafts, responsive report tables, keyboard focus/skip link, native private PIN dialog, honest connection and frozen states. |
+| Email | Bounded retry/timeouts, optional HTTPS Resend with idempotency, real SMTP fallback, visible delivery metadata, requested real test mail, no fake success when credentials fail. |
+| Entry fallback | Authenticated host can enrol a present participant and hand over a private PIN without any email provider. Existing accounts retain emergency PIN recovery. |
+| Pi launch | Preserve robot's existing HTTPS 443 route; use separate game HTTPS 8443. Private consistent backup, isolated release, tests before switch, generated systemd unit, local-health rollback and public doctor. |
 
 ## Verification
 
-- `npm test`: complete five-round rehearsal plus regressions for resend, cooldown, concurrency, a synthetic SMTP rejection, failed-registration cleanup, recovery, permissions and frozen results. Tests use temporary databases and never contact a real mail provider.
-- `npm run load-test`: 30 players behind one IP, 431 requests, zero errors in the local rehearsal. This measures the test environment, not the venue network or Pi.
-- Chromium browser check: mobile registration and PIN login, preserved drafts, countdown, network loss/recovery, host controls and final projector display. The rendered invitation QR was independently decoded to confirm its target. No JavaScript errors or content-policy violations were observed.
-- Dependency lockfile and Docker `npm ci` make installs reproducible.
+- `npm test`: isolated API/integration, mail and deployment checks. Covers all rounds, exact crisis losses, absent/stale clients, immutable reports, security score, both campaign attribution outcomes, concurrent publication, full festival completion/role workload/cooldown, restart and legacy schema migration, synthetic mail failures and private backup/configuration handling. A separate check proves host entry with outbox and all real providers disabled. No real mail is sent.
+- `npm run load-test`: 30 synthetic users behind one IP, 431 requests and zero errors in the local rehearsal. This measures this test environment, not the Pi or venue Wi-Fi.
+- Full Chromium rehearsal: host login and in-person entry/private PIN, real QR independently decoded, mobile player and Culture Ambassador, crisis/pause/resume, all five transitions and reports, source disclosures retained across polling, true/fake reveal, concurrent editing conflict/reload, credited campaign, festival help and urgent tickets, four saved security answers, overall story and projector. No JavaScript errors/CSP violations or mobile page overflow observed.
+- Visual inspection: host controls, mobile round report and final projector results. Tables scroll horizontally inside their panel on narrow phones.
+- Node syntax, shell syntax and whitespace checks. Dependency lockfile is updated and install remains reproducible.
 
-## Runtime checks still needed on the Raspberry Pi
+## Required on-device confirmation
 
-The review did not access or modify the Pi. GitHub changes must be pulled and the service restarted there, preserving `.env` and the SQLite database. Verify the actual public game URL, organiser contact and one real SMTP PIN/resend before opening the workshop. The QR uses the configured address; it does not create hosting or prove external reachability. An active saved round will return paused after the update.
+Run [ARRIVAL_RU.md](ARRIVAL_RU.md) on the Pi, then confirm local/public application identity from an external phone, unchanged Observatory route, real invitation QR, one actually received test email and registration PIN/resend. The launcher validates configuration but cannot prove credentials or inbox placement until sending/receipt are tested. Check the chosen public port on the actual venue network.
+
+A real optional short domain requires its owner's DNS/Cloudflare access. A verified Resend sender requires its actual domain/key. Neither was invented, purchased or activated. Current Gmail settings are preserved, not assumed to have been verified during this review. After an update/restart, an active saved round returns paused for the host to resume.

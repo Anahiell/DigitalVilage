@@ -1,119 +1,65 @@
-# DIGITAL VILLAGE 🌿 — Survive. Connect. Grow.
+# Digital Village — Survive. Connect. Grow.
 
-A mobile-first, real-time educational multiplayer strategy for the **RURALEM / Erasmus+ Digital Competences** module. Four villages, up to 32 players, five rounds, and a host-operated control center. Every decision affects a living economy whose metrics are calculated and persisted on the server.
+A mobile-first multiplayer teaching simulation for the RURALEM / Erasmus+ Digital Competences workshop: four villages, up to 32 participants, five rounds, and a host control center. One Node.js process calculates and saves the world in SQLite. The app and QR generator run on the Raspberry Pi; no AI API or cloud database is required.
 
-**Status: functional workshop MVP.** Public access and real email delivery depend on the running host's HTTPS, SMTP and privacy settings. The project uses modern HTML, CSS, JavaScript and a Node.js HTTP server with built-in SQLite, `qrcode` for invitations, and optional Nodemailer for Gmail delivery. It has no frontend framework.
+**Arriving with the Pi? Start with [the Russian arrival instructions](deploy/ARRIVAL_RU.md).** The tested code does not update the physical Pi until you run the update there. A real inbox and the venue network still need a delivery/connectivity check.
 
-## What's implemented
+## Implemented experience
 
-- **Registration**: one of four villages, exclusive team role (eight seats per village), real email address, and *optional* separate consent for one educational email simulation.
-- **Identity**: random unique six-digit PIN emailed on registration; PIN hash and private HTTP-only session; wrong-PIN lockout; rate limits; resend cooldown; host-only emergency PIN reset; restoration after browser refresh.
-- **World**: budgets, youth population, employment, internet, education, services, trust; income and upkeep; attractiveness and migration; time-series snapshots **every 10 real seconds**; charts rendered directly from history rather than predefined animation frames.
-- **Round 1**: five investments, persistent budgets, one-time 30% funding crisis at minute 10 or on host command.
-- **Living-world incidents**: server-selected favourable or challenging events every two minutes during rounds 1–4 (regional investments, broadband damage, exchange students, employers leaving, tourism, volunteers). Players see breaking-news banners; effects are saved in the economy and its charts.
-- **Round 2**: seven articles per village, real/fake variants, signatures and seals, team selections, host reveal, real effects on youth and trust.
-- **Round 3**: responsive mobile content editor, ten creative assets, campaign preview, deliberate licensing traps, host reveal and penalties/rewards.
-- **Round 4**: multi-user festival board; progress increases server-side; assigning to relevant roles is faster; helping tasks; timed arrival of urgent tickets; simulated festival outcome and impact.
-- **Round 5**: safe educational inbox + opt-in email notification leading to an on-site awareness page. No imitation of Microsoft or collection of passwords.
-- **Host**: separate login, readiness indicators, start / pause / resume / next, reveal results, grant money, trigger crisis and ticket event, emergency PIN issuance, simulated email outbox for rehearsal, separate projector mode, erase event data.
-- **Persistence**: SQLite in WAL mode; idempotent investment purchase, role reservation constraints, stored history and events; automatic state recovery after restarting the Node server.
-- **Participant support**: the login form keeps the entered email, shows persistent delivery errors and a 90-second resend countdown, and keeps the previous PIN valid if replacement mail fails. Simultaneous replacement requests cannot overwrite each other.
-- **Invitations**: the host dashboard and waiting-room projector show a real scannable QR for `PUBLIC_BASE_URL`, with a copyable invitation link. QR generation happens locally on the server.
-- **Recovery and reflection**: connection loss is visible while the browser reconnects; a restarted server pauses the saved round for the host to resume. **Finish simulation** freezes the economy and displays each village's actual youth change, remaining budget and trust.
+| Round | What participants do | What changes |
+|---|---|---|
+| 1 — Development, 20 min | Choose investments; react to a funding crisis | The crisis removes 30% of each village's current budget, once, at minute 10 or on host command. Investments affect the continuing economy. |
+| 2 — Information, 20 min | Verify and share up to six reports about other villages | Each workshop generates 28 shuffled articles from the actual round-one closing data: four facts and three fabrications per village. Official source bulletins show metrics, projects, signers and seals. Reveal explains each verdict. |
+| 3 — Content, 20 min | Publish a village campaign with selected creative assets | Explicit usage conditions and required attribution affect the outcome. Concurrent edits cannot silently overwrite a newer campaign. |
+| 4 — Collaboration, 30 min | Claim four standard festival tasks and two urgent tasks | Progress depends on time, role and workload. Helping another person has a one-minute cooldown. Urgent tasks appear at minute 4. Success requires all six tasks. |
+| 5 — Security, 15 min | Answer four practical questions about senders, links, data and urgent payments | Each answer is saved. The host closes the exercise to reveal explanations and apply the participation-adjusted trust outcome. An optional, separately consented notification uses real email. |
 
-## Run locally
+The server advances the world without a connected browser. Income, upkeep, migration and trust update every 10 active seconds; incidents appear every two active minutes in rounds 1–4. At the deadline the round closes automatically into **review**, freezing the economy until the host opens the next round. Pause stops both the clock and incidents. Restart restores an active round paused, without charging for offline time.
 
-Requires **Node.js 22.13 or newer** (SQLite is an experimental built-in API in Node 22; a warning is expected).
+Every closed round saves **all seven village metrics, changes, participant names and positions, decisions, incidents and a factual mini story**. Players and the projector can view reports; the archive retains previous rounds. Finishing adds a story spanning the completed workshop. Missing rounds are never invented.
 
-1. Copy `.env.example` to `.env` and set strong, distinct `ADMIN_PASSWORD` and `PIN_PEPPER`. **Do not commit `.env`.**
-2. For a private rehearsal only, keep `DEV_EMAIL_OUTBOX=1`. The host can see PINs in the development outbox. **Do not expose this mode to participants on a public network.**
-3. Run `npm ci`, then `npm start` inside this directory. Open `http://127.0.0.1:3000` in a browser. Run `npm test` for the API integration and recovery regression tests.
-4. To see the game: open the Host tab, sign in with `ADMIN_PASSWORD`, register players using another browser (or private windows), find their PINs in the host's test outbox, then press **Start the game**.
-5. In a second host tab open `/?projector=1` to show the projector presentation while keeping the dashboard in the first tab.
+Registration uses a private emailed six-digit PIN, hashed on the server, rate limits and HTTP-only sessions. Resend has a visible cooldown and preserves the old PIN when a replacement fails. The host can verify a participant in person and issue a private PIN if email is unavailable. Invitations include a real locally generated QR for `PUBLIC_BASE_URL`; changing that setting and restarting updates the QR.
 
-`npm ci` includes Nodemailer unless optional dependencies are explicitly omitted. Set `SMTP_EMAIL` and `SMTP_APP_PASSWORD` with a **separate Gmail account** protected by two-step verification and a Google app password. Never store these details in the browser. Test delivery with a single recipient before inviting 30 people. Sending with consumer Gmail can be restricted or delayed; be prepared to issue an emergency PIN. **PUBLIC_BASE_URL** must be the externally reachable HTTPS address used in your messages.
+## Local rehearsal
 
-SMTP success means the email service accepted the message, not that it has reached the inbox. The participant should check spam as well. A missing sender or SMTP failure returns a specific HTTP 503 error; a resend during cooldown returns HTTP 429 with `Retry-After`. Failed registration releases its village role. A failed replacement leaves the existing PIN intact. The host's rehearsal outbox is explicitly labelled as rehearsal and does not prove real email delivery.
+Requires Node.js **22.13+**; the already prepared Pi uses Node 24. Use one application process.
 
-Round-five opt-in notifications are sent in small background batches so a slow mail provider cannot hold up the round change. The world event feed records the accepted-message count. If the public address is missing, no unusable localhost link is sent; the on-site security lab remains available.
+1. Copy `.env.example` to `.env`; set distinct strong `ADMIN_PASSWORD` and `PIN_PEPPER`.
+2. For a private rehearsal use `DEV_EMAIL_OUTBOX=1` without real mail credentials. The host's labelled rehearsal outbox contains the synthetic PIN letters.
+3. Run `npm ci`, then `npm start`; open `http://127.0.0.1:3000`.
+4. Sign in on the Host tab. Use separate browser contexts for participants. Start the round, then **Close round & view results** → discuss → **Open next round**. Round five ends with **Finish simulation**.
+5. Open `/?projector=1` in a separate host tab for projection.
 
-## Public deployment with Railway (persistent storage)
+Do not expose rehearsal outbox mode publicly. For HTTPS operation, use the exact public origin in `PUBLIC_BASE_URL`; the browser uses secure session cookies.
 
-The app runs on a **single long-lived Node instance**, not a Vercel serverless function. Use the supplied `Dockerfile` (Node 22, no compilation/build step) to deploy the GitHub repository as a Railway service or an equivalent container host. Attach a **persistent volume mounted at `/data`** before any participants register. The SQLite database is stored at `/data/village.db`. Use **one replica only** (multiple app processes cannot safely share SQLite database traffic via a network volume).
+## Raspberry Pi operation
 
-Set these secrets in the hosting provider's **environment variables**, never in Git or a chat message:
+[Arrival guide](deploy/ARRIVAL_RU.md) · [Technical deployment details](deploy/PI_SETUP.md) · [Readiness review](deploy/WORKSHOP_REVIEW.md).
 
-| Variable | Value |
-|---|---|
-| `ADMIN_PASSWORD` | Random secret of at least 14 characters |
-| `PIN_PEPPER` | Independent random secret of at least 20 characters; changing it invalidates PINs |
-| `HOST` | `0.0.0.0` |
-| `DB_PATH` | `/data/village.db` (mount persistent storage at `/data`) |
-| `DEV_EMAIL_OUTBOX` | `0` (never show generated PINs in a publicly accessible outbox) |
-| `NODE_ENV` | `production` |
-| `PUBLIC_BASE_URL` | Public `https://...` URL once provisioned |
-| `PRIVACY_CONTACT` | Genuine organiser privacy contact before participant registration |
-| `SMTP_EMAIL` / `SMTP_APP_PASSWORD` | Dedicated real Gmail address / Google app password once configured |
+The launcher stages a complete version, installs locked dependencies, runs integration and 30-player checks, backs up the database/configuration, generates a systemd unit using the installed Node path, switches the release and checks health. `digital-village.service` starts after reboot and restarts after a crash. Saved data stays in the checkout's `storage/` directory through an absolute database path.
 
-Configure your host to check `GET /healthz`. Verify `https://<generated-public-domain>/healthz` and `/api/state` before sharing the QR code. Without SMTP, registration deliberately returns 503 rather than creating unusable player accounts. Never activate `DEV_EMAIL_OUTBOX=1` on the public service. With SMTP active, send **one test PIN** and verify delivery before opening registration to 30 people. The app intentionally blocks unauthorised admin actions and uses HTTP-only session cookies.
+The default prepared route uses **Tailscale Funnel on HTTPS port 8443**, preserving the existing Observatory at HTTPS port 443 / local port 8080. The launcher refuses to replace another service on 8443. Phones need ordinary Internet access; they do not need Tailscale installed. A custom hostname can instead use Cloudflare Tunnel to `http://127.0.0.1:3000` and the `--apply` launcher mode.
 
-**Deploy checklist:** GitHub connected → build with Dockerfile → one replica → persistent volume `/data` → environment secrets → HTTPS domain → SMTP delivery test → rehearsal with 30 clients → backup and recover volume → verify data deletion process with organisers. For rehearsal, avoid real participant personal data until privacy/consent wording is confirmed.
+`npm run doctor` checks local/public service identity, host authentication, sender configuration and the invitation QR. It deliberately sends **no mail**. To send one requested test, use Host → setup → **Send one delivery test**, or `node deploy/doctor.mjs --public --mail recipient@example.com` with an actual recipient you control.
 
-### Automated load check
+## Email
 
-`npm run load-test` simulates 30 distinct users behind the **same public IP**: simultaneous role reservations, PIN logins, polling waves, economy update, investment, grant and all five rounds. This uses a temporary local database and simulated outbox (no real emails or participant data), then cleans up. It does **not** prove external hosting or venue Wi-Fi performance; repeat a separate test against the deployed service before the workshop, only with approved synthetic accounts.
+- Gmail SMTP: set both `SMTP_EMAIL` and `SMTP_APP_PASSWORD` for a dedicated account. `SMTP_HOST` / `SMTP_PORT` optionally support another SMTP server.
+- Optional Resend HTTPS sender: set `RESEND_API_KEY` and `EMAIL_FROM` on your own verified sending domain. If both providers are configured, Resend is primary and SMTP is the real fallback.
+- Temporary errors receive bounded retries and timeouts. HTTP retries reuse an idempotency key. Permanent authentication errors remain visible. Failed real delivery never becomes fake rehearsal success.
+- Host diagnostics distinguish sending, provider acceptance, failure, interruption and rehearsal. Logs contain delivery metadata, not PIN bodies.
+- Provider acceptance **does not prove inbox receipt**. Check inbox/spam from a real phone before registration. A lost acknowledgment can also cause duplicate mail across providers; use the most recent successful PIN. The in-person host entry route keeps the workshop usable without email.
 
-## Connectivity / Raspberry Pi 5
+## Timing and facilitation
 
-This build uses a persistent Node process and a local SQLite database — it **cannot run as a static Vercel site or as serverless Vercel functions with durable SQLite storage**. For a local pilot you can host it on a Pi 5 or laptop, bind `HOST=0.0.0.0`, and connect all phones to the same trusted local Wi-Fi network. Test the client-isolation setting of the venue access point in advance. Guests must be able to connect to the host. Use HTTPS with a reverse proxy for real email/PIN sign-ins; do not send participant credentials in cleartext over a shared network. For remote public deployment choose a reliable always-on host with a persistent disk, HTTPS, automatic restart, and database backups, or migrate the data layer to a managed PostgreSQL service.
+Maximum active round time is 105 minutes; 10 minutes of registration and 5 minutes of final reflection fill two hours. Review pauses add wall-clock time. To fit five two-minute report discussions into two hours, close rounds after **18 / 18 / 18 / 28 / 13 minutes**. Leave round one running past minute 10 and round four past minute 4 to include their timed crises. Otherwise budget a longer workshop.
 
-If the network fails entirely, have printed activity cards and the on-site learning exercises ready. Server-side game state is persisted, so restarts do not reset the world.
+Four tables of 5–8 people work well. Each council has a mayor and specialised roles. Different villages start with different resources; compare changes and decisions, as well as final values. This is a simplified learning simulation, not an economic forecast.
 
-## Game timing
+## Verification and data
 
-| Round | Topic | Duration |
-| --- | --- | ---: |
-| 1 | Rural infrastructure, inequality, investment | 20 min |
-| 2 | Information literacy and fact-checking | 20 min |
-| 3 | Digital content and copyright | 20 min |
-| 4 | Digital collaboration and project management | 30 min |
-| 5 | Cybersecurity and privacy | 15 min |
+`npm test` runs isolated integration, mail-failure, recovery, report, timing, concurrency and Pi-preparation checks. `npm run load-test` rehearses 30 players behind one IP. Both use temporary databases and synthetic mail; neither sends real participant email. See the readiness review for browser scenarios and remaining hardware checks.
 
-Plus 10 minutes for registration and 5 minutes for final reflection = **120 minutes**. Host advances rounds manually; the world ticks automatically and some events fire on timed triggers. The moderator should pause the simulation for discussion or technical difficulties.
+Use a real `PRIVACY_CONTACT`; explain collected names/emails, roles, access, purposes, retention and the separate optional exercise email. The host's confirmed **Erase event data** clears this app's event data; it cannot remove sent emails or private backups. Keep `.env`, `storage/`, `backups/` and `runtime/` out of Git. Backups include private configuration and must remain private.
 
-## A living village, not a scripted chart
-
-Every 10 seconds of playing time the server calculates:
-
-- `attractiveness` from internet, education, services and jobs;
-- `youth migration` from attractiveness, public trust and budget health;
-- `tax and commercial income` from population, employment and trust;
-- `operating costs` from the ongoing provision of infrastructure and public services;
-- `public trust drift` from services and the fiscal position;
-- task progress from time, role fit and the number of tasks assigned to a person.
-
-The resulting state is saved in the `villages` table and appended to `snapshots`. A host can issue a grant at any moment. Investments shift future income, costs and migration — not just a single displayed score. UI charts use the actual last 150 stored samples, refresh every 3.5 seconds and draw continuous SVG paths.
-
-Pausing also pauses the countdown to the next random incident. On a server restart, an active round is restored **paused at the last saved simulation tick**, with at most ten seconds of unsaved active time discarded. Offline time does not consume village budgets. The host resumes explicitly. After **Finish simulation**, time and economic results stay fixed; grants, new rounds and resume are rejected. Starting another workshop requires the explicit event-data reset.
-
-This is a *teaching simulation*, not an economic forecast. The parameters are intentionally simplified for short-group discussions; adjust balance after a full rehearsal.
-
-## Privacy and safety before the event
-
-**Mandatory preflight:** the organiser should supply a real privacy contact (`PRIVACY_CONTACT`), explain who controls registration data, what is collected, the purposes, access, data-retention period and deletion, and offer a separate optional simulated-email opt-in. Set the hosted URL, confirm that email delivery works, and explain on-screen that the QR link is part of the workshop. Account emails and participation must be kept separate from any competition scoring. Do not use real brand-lookalike domains, password prompts, click telemetry, or collection of other personal information.
-
-The host control center includes **Erase event data**, guarded by explicit confirmation and another admin-password check. It permanently clears locally stored players, emails, session tokens, posts, metrics, event history, tasks, and development outbox, and resets village values. **It cannot delete sent-email copies in Gmail or external backups**; those must be handled separately according to the retention notice.
-
-**Security review required before public Internet launch:** this is a fast educational prototype, not an independently audited identity system. Serve it behind an HTTPS reverse proxy, restrict direct access, configure a verified sender, use strong environmental secrets and an appropriate backup/monitoring plan. Avoid pointing a public URL at a laptop or Pi over an unsecured tunnel.
-
-## Suggested 20–30 person workshop layout
-
-Four village tables, 5–8 people at each. Each table elects its own mayor, finance officer, digital officer, media officer, events coordinator and community representatives. The lecturer controls round changes from their laptop, while the projector tab shows shared stats and reveal screens.
-
-## Project files
-
-- `server.js`: API, PIN authentication, economy, rounds and game database.
-- `data.js`: village starting positions, investments, roles, editorial news, licensing examples, tickets and round metadata.
-- `public/app.js`: responsive interactive player/host/projector experience and SVG chart rendering.
-- `public/style.css`: design and mobile layouts.
-- `tests/flow.test.js`: integration rehearsal over all five rounds, role exclusivity, privileges, state, and cleanup.
+The optional `Dockerfile` also supports a single persistent container: mount `/data`, set `DB_PATH=/data/village.db`, `HOST=0.0.0.0`, real sender/contact, strong secrets, `DEV_EMAIL_OUTBOX=0`, and the HTTPS public URL. Health is `GET /healthz` → `{"ok":true,"app":"digital-village"}`. Do not use multiple replicas or ephemeral serverless storage for this SQLite app.

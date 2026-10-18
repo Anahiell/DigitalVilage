@@ -23,7 +23,7 @@ export const INVESTMENTS=[
 ];
 export const ROUNDS=[
  {id:1,name:'Build Your Village',kicker:'DECISIONS SHAPE THE FUTURE',description:'Invest in essential services, keep the budget afloat and persuade young people to stay.',duration:1200},
- {id:2,name:'Information War',kicker:'DON’T BELIEVE EVERYTHING',description:'Review six or seven stories about each village. Choose the news you trust — and defend your reasoning.',duration:1200},
+ {id:2,name:'Information War',kicker:'DON’T BELIEVE EVERYTHING',description:'Review seven stories about each village. Choose the news you trust — and defend your reasoning.',duration:1200},
  {id:3,name:'Make Your Village Famous',kicker:'CREATE RESPONSIBLY',description:'Build a beautiful tourist invitation using a mobile-friendly editor. Some assets have hidden restrictions.',duration:1200},
  {id:4,name:'Festival Under Pressure',kicker:'COLLABORATION IS THE KEY',description:'Assign festival tasks, handle urgent crises and help each other meet the deadline.',duration:1800},
  {id:5,name:'The Security Surprise',kicker:'THINK BEFORE YOU CLICK',description:'Investigate a suspicious message and learn how phishing and personal data protection work.',duration:900}
@@ -40,15 +40,6 @@ export const MEDIA_ASSETS=[
  {id:'cc',label:'CC BY licensed illustration',symbol:'CC',kind:'licensed',color:'#d5f9e6',allowed:true},
  {id:'unknown',label:'Unlicensed stock illustration',symbol:'★',kind:'licensed',color:'#ffd9d7',allowed:false}
 ];
-export const NEWS_TEMPLATES=[
- ['Town council approves free Wi-Fi in community centre','An official statement confirms that residents will receive free access to the community network.',true],
- ['Mayor signs a new bicycle trail partnership','Local volunteers and the municipality jointly announced new signposted paths for visitors.',true],
- ['Youth volunteers prepare a weekend clean-up','A public notice lists the date and volunteer coordinators for the clean-up effort.',true],
- ['Council agrees on a public digital-skills workshop','The village library will host sessions for people learning essential computer skills.',true],
- ['Mayor personally guarantees €2 million for every resident','An extraordinary claim circulates online without any signed council document.',false],
- ['All local schools will close permanently tomorrow','An alarming post lacks a valid mayoral signature and misuses an old council seal.',false],
- ['Village announces a secret deal to ban mobile phones','The story is attributed to a person who is not part of the council administration.',false]
-];
 export const FESTIVAL_TASKS=[
  {title:'Reserve event venue',type:'blue',role:'events',minutes:4,description:'Confirm a suitable meeting space with accessible entry.'},
  {title:'Publish festival programme',type:'blue',role:'media',minutes:5,description:'Share the programme and clear directions.'},
@@ -57,3 +48,15 @@ export const FESTIVAL_TASKS=[
  {title:'Repair damaged water pipeline',type:'red',role:'digital',minutes:8,description:'Coordinate urgent infrastructure repairs before visitors arrive.'},
  {title:'Replace cancelled keynote speaker',type:'red',role:'events',minutes:8,description:'Contact a replacement speaker before the opening.'}
 ];
+
+export const SECURITY_QUESTIONS=[
+ {id:'sender',title:'The sender looks familiar',message:'“Digital Village Support” asks you to reply with your login PIN to keep your seat. The sender address is not the official game address.',options:[{id:'reply',text:'Reply with the PIN so the seat is not lost.'},{id:'verify',text:'Open the known game address and ask the host through a trusted channel.'},{id:'forward',text:'Forward the message and PIN to the whole village.'}],correct:'verify',explanation:'A display name is not proof of identity. Keep the PIN private and verify unexpected requests through the known site or host.'},
+ {id:'url',title:'A convincing link',message:'A message displays the text “Open Digital Village”, but its destination uses a different domain. It promises an immediate budget bonus.',options:[{id:'open',text:'Open it because the visible link text names the game.'},{id:'share',text:'Ask everybody to try the link at the same time.'},{id:'known',text:'Use the saved game link or QR and check with the host.'}],correct:'known',explanation:'Link text can hide another destination. A promised reward is not evidence that the destination is trustworthy.'},
+ {id:'privacy',title:'A sponsor wants the participant list',message:'An unfamiliar “festival sponsor” asks for every participant’s email address and PIN in a public group chat.',options:[{id:'decline',text:'Decline and ask the organiser to verify the request and purpose.'},{id:'emails',text:'Share the list because email addresses are not passwords.'},{id:'pins',text:'Share everything so the sponsor can help.'}],correct:'decline',explanation:'Do not disclose other participants’ personal information or credentials to an unverified requester.'},
+ {id:'urgency',title:'Three minutes to act',message:'An urgent notice says the village account will be deleted unless you pay a small “verification fee” immediately.',options:[{id:'pay',text:'Pay quickly before the timer expires.'},{id:'pause',text:'Stop, verify the notice with the host, and avoid the payment link.'},{id:'card',text:'Enter a bank card but do not press the final button.'}],correct:'pause',explanation:'Urgency and payment pressure are warning signs. This workshop never needs participants’ bank details.'}
+];
+
+for(const asset of MEDIA_ASSETS){
+ asset.usage=asset.allowed?'Workshop asset: reuse is permitted in this tourism campaign.':asset.kind==='brand'?'No sponsorship agreement is supplied. Do not present the brand as this campaign’s sponsor.':'No reuse licence or source is supplied. Obtain permission before publishing.';
+ if(asset.id==='cc'){asset.requiresCredit=true;asset.credit='Digital Village workshop artwork (CC BY)';asset.usage='CC BY training asset: include the supplied credit when publishing.';}
+}

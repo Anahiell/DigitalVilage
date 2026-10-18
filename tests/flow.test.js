@@ -10,7 +10,7 @@ test('complete simulation: private accounts, roles, dynamic economy and five rou
  const tmp=await mkdtemp(join(tmpdir(),'digital-village-'));
  const port=31000+Math.floor(Math.random()*20000),base=`http://127.0.0.1:${port}`;
  const adminPass='integration-admin-password-very-long',pepper='integration-pepper-at-least-twenty-characters';
- const env={...process.env,HOST:'127.0.0.1',PORT:String(port),ADMIN_PASSWORD:adminPass,PIN_PEPPER:pepper,DB_PATH:join(tmp,'world.db'),DEV_EMAIL_OUTBOX:'1',SMTP_EMAIL:'',SMTP_APP_PASSWORD:'',PUBLIC_BASE_URL:base,NODE_ENV:'development'};
+ const env={...process.env,HOST:'127.0.0.1',PORT:String(port),ADMIN_PASSWORD:adminPass,PIN_PEPPER:pepper,DB_PATH:join(tmp,'world.db'),DEV_EMAIL_OUTBOX:'1',SMTP_EMAIL:'',SMTP_APP_PASSWORD:'',RESEND_API_KEY:'',EMAIL_FROM:'',PUBLIC_BASE_URL:base,NODE_ENV:'development'};
  const child=spawn(process.execPath,['server.js'],{cwd:process.cwd(),env,stdio:['ignore','pipe','pipe']});
  let errs='';child.stderr.on('data',d=>errs+=d);
  t.after(async()=>{child.kill();await sleep(200);await rm(tmp,{recursive:true,force:true});});
@@ -46,10 +46,12 @@ test('complete simulation: private accounts, roles, dynamic economy and five rou
  s=(await request('state',undefined,alice)).json;assert.equal(s.events.filter(e=>e.kind==='random').length,randomCount);
  assert.equal((await request('action',{op:'next'},admin)).status,200);
  s=(await request('state',undefined,alice)).json;assert.equal(s.game.round,2);assert.equal(s.news.length,28);assert.ok(!('authentic' in s.news[0]));
- assert.equal((await request('action',{op:'chooseNews',id:'riverstone-n5'},alice)).status,200);
- assert.equal((await request('action',{op:'chooseNews',id:'riverstone-n1'},alice)).status,200);
+ const generated=(await request('state',undefined,admin)).json.news.filter(n=>n.sourceVillage==='riverstone');
+ const fake=generated.find(n=>!n.authentic),real=generated.find(n=>n.authentic);
+ assert.equal((await request('action',{op:'chooseNews',id:fake.id},alice)).status,200);
+ assert.equal((await request('action',{op:'chooseNews',id:real.id},alice)).status,200);
  assert.equal((await request('action',{op:'revealNews'},admin)).status,200);
- s=(await request('state',undefined,alice)).json;assert.equal(s.game.newsRevealed,true);assert.equal(s.news.find(x=>x.id==='riverstone-n5').authentic,false);
+ s=(await request('state',undefined,alice)).json;assert.equal(s.game.newsRevealed,true);assert.equal(s.news.find(x=>x.id===fake.id).authentic,false);
  assert.equal((await request('action',{op:'next'},admin)).status,200);
  assert.equal((await request('action',{op:'publish',title:'Come visit Green Valley!',body:'We have forests, culture and a wonderful community festival for everybody.',assets:['festival','bmw']},alice)).status,200);
  assert.equal((await request('action',{op:'revealMedia'},admin)).status,200);

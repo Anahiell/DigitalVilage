@@ -1,0 +1,24 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,mkdir,copyFile,writeFile,readFile,readdir,stat,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {spawnSync} from 'node:child_process';
+import {parseEnv} from 'node:util';
+import {DatabaseSync} from 'node:sqlite';
+
+test('Pi preparation preserves secrets, creates a consistent WAL backup and generates an explicit service unit',async t=>{
+ const temp=await mkdtemp(join(tmpdir(),'dv-deploy-'));t.after(()=>rm(temp,{recursive:true,force:true}));
+ await mkdir(join(temp,'deploy'));await mkdir(join(temp,'storage'));
+ for(const file of ['deploy/pi-config.mjs','deploy/backup.mjs','mailer.js','.env.example'])await copyFile(file,join(temp,file));
+ const secret='existing-pepper-must-not-change-0123456789',password='existing-host-password-0123456789';
+ await writeFile(join(temp,'.env'),`PORT=34567\nADMIN_PASSWORD=${password}\nPIN_PEPPER=${secret}\nSMTP_EMAIL=operator@example.invalid\nSMTP_APP_PASSWORD=synthetic-password\nDEV_EMAIL_OUTBOX=1\nPRIVACY_CONTACT=organisers@example.org\nPUBLIC_BASE_URL=https://village.example.invalid\n`);
+ const configured=spawnSync(process.execPath,['deploy/pi-config.mjs','--configure'],{cwd:temp,encoding:'utf8'});assert.equal(configured.status,0,configured.stderr);
+ const env=parseEnv(await readFile(join(temp,'.env'),'utf8'));assert.equal(env.PIN_PEPPER,secret);assert.equal(env.ADMIN_PASSWORD,password);assert.equal(env.PRIVACY_CONTACT,'operator@example.invalid');assert.equal(env.DEV_EMAIL_OUTBOX,'0');assert.equal(env.DB_PATH,join(temp,'storage/village.db'));assert.equal((await stat(join(temp,'.env'))).mode&0o777,0o600);assert.equal(configured.stdout.includes(secret),false);
+ const db=new DatabaseSync(env.DB_PATH);db.exec('PRAGMA journal_mode=WAL;CREATE TABLE facts(value TEXT);INSERT INTO facts VALUES(\'one\'),(\'two\');');t.after(()=>db.close());
+ const backup=spawnSync(process.execPath,['deploy/backup.mjs'],{cwd:temp,encoding:'utf8'});assert.equal(backup.status,0,backup.stderr);assert.equal(backup.stdout.includes(password),false);
+ const files=await readdir(join(temp,'backups')),copy=new DatabaseSync(join(temp,'backups',files.find(f=>f.endsWith('.db'))),{readOnly:true});
+ assert.equal(copy.prepare('SELECT COUNT(*) AS n FROM facts').get().n,2);copy.close();
+ const unit=spawnSync(process.execPath,['deploy/pi-config.mjs','--unit','--user','robot'],{cwd:temp,encoding:'utf8'});assert.equal(unit.status,0,unit.stderr);
+ const text=await readFile(join(temp,'runtime/digital-village.service'),'utf8');assert.match(text,/User=robot/);assert.ok(text.includes(join(temp,'runtime/current')));assert.ok(text.includes(process.execPath));assert.ok(text.includes('Restart=always'));assert.equal(text.includes(password),false);
+});

@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import {VILLAGES,ROLES} from '../data.js';
 const temp=await mkdtemp(join(tmpdir(),'dv-load-')),port=randomInt(32000,55000);
 const base='http://127.0.0.1:'+port,pass='admin-test-password-0123456789';
-const child=spawn(process.execPath,['server.js'],{cwd:new URL('../',import.meta.url).pathname,env:{...process.env,HOST:'127.0.0.1',PORT:String(port),DB_PATH:join(temp,'test.db'),NODE_ENV:'development',ADMIN_PASSWORD:pass,PIN_PEPPER:'load-pepper-12345678901234567890',DEV_EMAIL_OUTBOX:'1',SMTP_EMAIL:'',SMTP_APP_PASSWORD:''},stdio:['ignore','pipe','pipe']});
+const child=spawn(process.execPath,['server.js'],{cwd:new URL('../',import.meta.url).pathname,env:{...process.env,HOST:'127.0.0.1',PORT:String(port),DB_PATH:join(temp,'test.db'),NODE_ENV:'development',ADMIN_PASSWORD:pass,PIN_PEPPER:'load-pepper-12345678901234567890',DEV_EMAIL_OUTBOX:'1',SMTP_EMAIL:'',SMTP_APP_PASSWORD:'',RESEND_API_KEY:'',EMAIL_FROM:''},stdio:['ignore','pipe','pipe']});
 let err='',reqs=0;const lat=[];child.stderr.on('data',b=>err+=b);
 const api=async(route,body,cookie,status=200)=>{const tick=performance.now();const r=await fetch(base+'/api/'+route,{method:body===undefined?'GET':'POST',headers:{...(body===undefined?{}:{'Content-Type':'application/json'}),...(cookie?{Cookie:cookie}:{})},body:body===undefined?undefined:JSON.stringify(body)});const d=await r.json();lat.push(performance.now()-tick);reqs++;assert.equal(r.status,status,route+': '+JSON.stringify(d));return {...d,cookie:r.headers.get('set-cookie')?.split(';')[0]};};
 try{

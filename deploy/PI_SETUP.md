@@ -1,64 +1,92 @@
-# Raspberry Pi 5 deployment (Digital Village)
+# Raspberry Pi operation
 
-This service file assumes the Raspberry Pi account is `robot`, the checkout is at `/home/robot/projects/DigitalVilage` and Node.js 22.13+ is at `/usr/bin/node`. Confirm **every path** before enabling; if Node was installed using nvm, its absolute path will be different.
+For the quick Russian procedure, use [ARRIVAL_RU.md](ARRIVAL_RU.md). These instructions target the existing `robot` checkout at `/home/robot/projects/DigitalVilage`, Node 22.13+ and the already installed Tailscale service. The code was tested locally; applying it and verifying the physical Pi remains an on-device operation.
 
-## Before starting
+## Updating the existing installation
 
-1. On the Pi, verify `node --version`, `command -v node`, `git --version` and `tailscale version`.
-2. Checkout repository into `~/projects/DigitalVilage`, not into an existing project's directory.
-3. Run `npm ci --omit=dev`. Node.js 22.13+ is needed for `node:sqlite`.
-4. Copy `.env.example` to `.env`. Generate two **different random secrets**, at least 14 chars for `ADMIN_PASSWORD` and 20 for `PIN_PEPPER`. Never paste secrets into chat or Git. Set `HOST=127.0.0.1`, `PORT=3000`, `NODE_ENV=production`, `DEV_EMAIL_OUTBOX=0`, `PRIVACY_CONTACT` to a real address. Set private file permissions: `chmod 600 .env`. SMTP can be added later. Registration intentionally returns HTTP 503 until SMTP is configured. Do **not** set development email outbox to 1 while public access is enabled.
-5. Confirm the application works privately before opening a Funnel.
+Run as the normal Pi user, not root:
 
-## Enable reboot auto-start with systemd
-
-From the repository root (after verifying `whoami`, `pwd` and `command -v node` match the unit file):
-
-```sh
-sudo cp deploy/digital-village.service /etc/systemd/system/digital-village.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now digital-village.service
-systemctl status digital-village.service --no-pager
+```bash
+cd ~/projects/DigitalVilage &&
+git fetch origin main &&
+git show origin/main:deploy/update-pi.sh > /tmp/digital-village-update.sh &&
+bash /tmp/digital-village-update.sh "$PWD"
 ```
 
-The `enable` operation creates an autostart symlink. `--now` also starts the service immediately. The database is persisted at `storage/village.db` in the project by default. The service restarts when the application crashes.
+The bootstrap requires a clean tracked `main` checkout and merges only fast-forward. It preserves an old untracked generated `package-lock.json` under ignored private backups if necessary. It never resets source edits or deletes saved data.
 
-Diagnostics:
+`pi-launch.sh --funnel` backs up the existing `.env` and a consistent SQLite snapshot using `VACUUM INTO` (including committed WAL content), then normalises the production configuration. It preserves valid host and PIN secrets, uses an absolute `DB_PATH`, disables rehearsal outbox, and validates sender/contact/HTTPS settings. It stages `git archive HEAD` under `runtime/releases/`, runs locked installation, integration tests and the synthetic 30-player rehearsal, then switches `runtime/current` and the systemd unit. The running app never reads a mixture of old and new release files. Tests clear inherited mail credentials and never send real emails.
 
-```sh
+The generated unit uses the actual absolute Node executable, the source checkout's `.env`, `runtime/current` as working directory, a private umask and restart-on-failure behaviour. It enables reboot autostart. If local health fails after switching, it restores the previous unit/release. Database migrations are additive; the launcher does not automatically replace the live database with a backup.
+
+Ignored runtime locations:
+
+- `storage/`: durable database, outside the release tree.
+- `backups/`: consistent database copies and private environment copies; protect and expire these according to the organiser's retention policy.
+- `runtime/releases/`: complete application versions.
+- `runtime/current`: active version symlink; `runtime/previous-digital-village.service`: previous unit.
+
+A public-route or DNS failure after healthy local startup is reported without discarding the working local release. Avoid updating during a live workshop; pause first. Restarted playing rounds stay paused until the host resumes.
+
+## Keep the existing robot site
+
+The recorded setup has Observatory at local port 8080 and public `https://robobrain.taild17717.ts.net` on HTTPS 443. **Do not replace or reset that Funnel.** Digital Village uses local port 3000 (or its existing configured PORT), with separate public HTTPS **8443**.
+
+The launcher reads the current Tailscale DNS name and existing Funnel routes. It refuses an occupied 8443 route unless it already targets this app. Once the local app is healthy it runs:
+
+```bash
+sudo tailscale funnel --bg --https=8443 http://127.0.0.1:3000
+```
+
+Use the configured application port if different. Funnel must already be allowed for the tailnet; policy/HTTPS enablement can require the tailnet owner's account. With `--bg` the configuration persists through restart. Funnel supports specific HTTPS ports and its tailnet `*.ts.net` hostname, rather than an arbitrary custom DNS name. Verify outside the LAN and allow for DNS propagation. Do not use `tailscale funnel reset`, which removes other routes too.
+
+## Optional custom hostname on the same Pi
+
+This is optional and requires control of a real domain; no domain was purchased or DNS changed by this code update.
+
+1. Use an existing domain whose zone is managed in your Cloudflare account. Choose an available subdomain such as `village.your-domain` or `ruralem.your-domain`.
+2. Follow Cloudflare's [remote tunnel procedure](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/get-started/create-remote-tunnel/): create a named tunnel, install the Linux ARM64 connector on the Pi with the supplied account-specific command, and run it as a system service. Keep its token private.
+3. Add a published hostname for the selected subdomain with service type HTTP and URL `http://127.0.0.1:3000` (use your actual PORT). Use the root application route. This tunnel creates the route without router port forwarding. The network must allow the connector's required outbound traffic, including port 7844.
+4. Put the exact origin, e.g. `PUBLIC_BASE_URL=https://village.your-domain`, in the checkout's private `.env`. Run `bash deploy/pi-launch.sh --apply` to deploy using that origin without modifying Funnel settings.
+5. Run `npm run doctor`, open the new URL on a phone using mobile data, and rescan the new invitation QR. Use only the chosen canonical game origin; same-origin POST checks intentionally reject a mismatched alternate address.
+
+The application still runs on the Pi; the tunnel only carries HTTPS traffic. Power and Internet loss still stop public access. The old public game route may still exist until explicitly disabled for that port by its owner; Observatory remains separate.
+
+## Real email
+
+The existing dedicated Gmail settings can stay in `.env`:
+
+```dotenv
+DEV_EMAIL_OUTBOX=0
+SMTP_EMAIL=your-dedicated-address
+SMTP_APP_PASSWORD=your-private-google-app-password
+```
+
+These are configuration descriptions, not usable credentials. Gmail requires the owner's actual account configuration. SMTP_HOST/SMTP_PORT default to `smtp.gmail.com` / `465` and can be changed for another provider.
+
+For optional primary HTTPS delivery, verify a real sending domain in Resend and apply the SPF/DKIM records it supplies; configure DMARC for the domain too. Then set `RESEND_API_KEY` and `EMAIL_FROM` with your actual verified address. Keep Gmail configured for a second real route. No sender domain/key was provisioned by this update. See [Resend's send API](https://resend.com/docs/api-reference/emails/send-email).
+
+Restart after changing settings. Host → setup → **Send one delivery test** sends one explicitly requested real message. Alternatively, with your actual recipient:
+
+```bash
+node deploy/doctor.mjs --public --mail your-address
+```
+
+Ordinary `npm run doctor` never sends mail. Provider acceptance is not inbox confirmation. Check actual receipt and a registration PIN/resend before inviting the room. Gmail limits, recipient filtering and a provider outage remain possible. Host in-person enrolment and emergency PIN issuance work without mail credentials.
+
+## Health, reboot and recovery
+
+```bash
+npm run doctor
+systemctl is-enabled digital-village
+systemctl is-active digital-village
 journalctl -u digital-village -n 50 --no-pager
-curl -sS http://127.0.0.1:3000/healthz
+curl --fail http://127.0.0.1:3000/healthz
+tailscale funnel status
 ```
 
-Expected response to the health request: `{"ok":true}`.
+Health must identify this application: `{"ok":true,"app":"digital-village"}`. The doctor also checks authenticated host access, the configured/running sender mode and the QR URL, without printing secrets. Reboot once before the event when you have access to restore connectivity; then verify local and external health. A lost Internet connection must not advance offline village budgets.
 
-## Public HTTPS: Tailscale Funnel (only after private + security checks)
+If the launcher restores the previous service after a failed local health check, inspect its journal before trying again. Private backups permit deliberate recovery; do not copy a database over a running writer or discard `.env`/`PIN_PEPPER`. Do not run both `npm start` and systemd against the same port/database.
 
-With Tailscale connected and MagicDNS/HTTPS/Funnel enabled for the tailnet:
-
-```sh
-sudo tailscale funnel --bg 3000
-sudo tailscale funnel status
-```
-
-Tailscale provides a genuine `https://*.ts.net` address and reverse proxies to `http://127.0.0.1:3000`. A Funnel configured with `--bg` persists through reboot and resumes when the Pi reconnects to Tailscale; no separate Funnel systemd unit is necessary. Funnel is public to **anyone with the URL** and has bandwidth limits. Only enable once `DEV_EMAIL_OUTBOX=0`, secure admin secrets, consent notice and SMTP have been checked. Set `PUBLIC_BASE_URL` to the exact HTTPS URL and restart `digital-village`. Use `sudo tailscale funnel reset` to disable all public Funnel services if needed; verify no other services use Funnel first.
-
-## Reboot rehearsal
-
-Before the event, reboot the Pi and verify all three:
-- `systemctl is-enabled digital-village` says `enabled`
-- `systemctl is-active digital-village` says `active`
-- `curl http://127.0.0.1:3000/healthz` succeeds
-
-Then check the public HTTPS address **from a phone on mobile data**, not only on the same Wi-Fi. Simulate 30 players using test accounts before collecting real attendee information.
-
-## Important limitations
-- This deployment uses your Pi's storage and home internet. If the Pi loses power or internet, public access stops; SQLite persists on disk.
-- A server restart restores an active round paused at its last saved simulation tick. The host must press **Resume**; budgets and task progress do not advance during the outage. Rehearse this with a test workshop before the event.
-- Gmail SMTP requires the owner's own account/app password; never put credentials in the GitHub repository.
-- If an older site already occupies port 3000, change Digital Village's PORT and Funnel target **consistently**.
-- The existing README also contains security/privacy preflight requirements; this project is a fast prototype, not audited production software.
-
-## Applying a tested code update
-
-Changes committed to GitHub do not themselves update this Pi. While a workshop is in progress, pause the round before updating. Pull the reviewed commit into this checkout, run `npm ci --omit=dev`, then restart `digital-village`. Keep `.env` and `storage/` in place: they hold the host configuration and saved workshop. Check `/healthz`, sign in as host, confirm the invitation QR points to the public game address, and explicitly resume the saved round when the room is ready. Verify one actual PIN email and its resend before inviting participants. Never reset the database as part of a code update.
+The static `digital-village.service` is a legacy example with fixed paths. Prefer the generated unit: it detects the actual Node installation and coherent release directory.

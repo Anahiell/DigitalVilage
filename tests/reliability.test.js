@@ -1,44 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {spawn} from 'node:child_process';
-import {once} from 'node:events';
-import {mkdtemp,rm,writeFile} from 'node:fs/promises';
-import {tmpdir} from 'node:os';
-import {join} from 'node:path';
-import {randomInt} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
-
+import {rehearsal} from './helpers.mjs';
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-async function rehearsal(t){
- const directory=await mkdtemp(join(tmpdir(),'dv-reliability-'));
- const port=randomInt(32000,55000),base=`http://127.0.0.1:${port}`;
- const password='reliability-host-password-0123456789',dbPath=join(directory,'world.db');
- // Test-only SMTP failure, intercepted before Nodemailer can contact any provider.
- await writeFile(join(directory,'smtp-register.mjs'),`import {register} from 'node:module';register(new URL('./smtp-hook.mjs',import.meta.url));`);
- await writeFile(join(directory,'smtp-hook.mjs'),`export async function resolve(name,context,next){if(name==='nodemailer')return {url:'test:smtp-failure',shortCircuit:true};return next(name,context);}
-export async function load(url,context,next){if(url==='test:smtp-failure')return {format:'module',shortCircuit:true,source:"export default {createTransport(){return {async sendMail(){await new Promise(r=>setTimeout(r,200));throw Error('Synthetic SMTP rejection')}}}}"};return next(url,context);}`);
- let child,stderr='';
- const env={...process.env,HOST:'127.0.0.1',PORT:String(port),DB_PATH:dbPath,ADMIN_PASSWORD:password,PIN_PEPPER:'reliability-pepper-01234567890123456789',DEV_EMAIL_OUTBOX:'1',SMTP_EMAIL:'',SMTP_APP_PASSWORD:'',PUBLIC_BASE_URL:base,NODE_ENV:'development'};
- async function stop(){if(child&&child.exitCode===null){const exited=once(child,'exit');child.kill();await exited;}}
- async function start(overrides={},failMail=false){
-  stderr='';child=spawn(process.execPath,[...(failMail?['--import',join(directory,'smtp-register.mjs')]:[]),'server.js'],{cwd:process.cwd(),env:{...env,...overrides},stdio:['ignore','ignore','pipe']});
-  child.stderr.on('data',chunk=>stderr+=chunk);
-  for(let i=0;i<100;i++){
-   if(child.exitCode!==null)throw Error(stderr);
-   try{if((await fetch(base+'/healthz')).ok)return;}catch{}
-   await sleep(40);
-  }
-  throw Error('Server did not start: '+stderr);
- }
- async function request(path,body,cookie){
-  const res=await fetch(base+path,{method:body===undefined?'GET':'POST',headers:{...(body===undefined?{}:{'Content-Type':'application/json'}),...(cookie?{Cookie:cookie}:{})},body:body===undefined?undefined:JSON.stringify(body)});
-  const data=res.headers.get('content-type')?.includes('application/json')?await res.json():await res.text();
-  return {status:res.status,data,headers:res.headers,cookie:res.headers.get('set-cookie')?.split(';')[0]};
- }
- t.after(async()=>{await stop();await rm(directory,{recursive:true,force:true});});
- await start();
- return {request,stop,start,dbPath,password,base};
-}
 const pinFrom=message=>message.body.match(/PIN is: (\d{6})/)[1];
 
 test('PIN resend reports cooldown, replaces exactly once and preserves a working code when mail is unavailable',async t=>{
@@ -116,8 +80,9 @@ test('host invitations, role permissions, pause/restart recovery and frozen fina
  assert.equal((await request('/api/action',{op:'resume'},admin)).status,200);
  assert.equal((await request('/api/state',undefined,admin)).data.events.some(e=>e.kind==='random'),false);
  assert.equal((await request('/api/action',{op:'next'},admin)).status,200);
- assert.equal((await request('/api/action',{op:'chooseNews',id:'riverstone-n1'},culture)).status,200);
- assert.equal((await request('/api/action',{op:'unchooseNews',id:'riverstone-n1'},finance)).status,403);
+ const article=(await request('/api/state',undefined,admin)).data.news.find(n=>n.sourceVillage==='riverstone'&&n.authentic).id;
+ assert.equal((await request('/api/action',{op:'chooseNews',id:article},culture)).status,200);
+ assert.equal((await request('/api/action',{op:'unchooseNews',id:article},finance)).status,403);
  assert.equal((await request('/api/state',undefined,culture)).data.choices.length,1);
  assert.equal((await request('/api/action',{op:'next'},admin)).status,200);
  assert.equal((await request('/api/action',{op:'publish',title:'A culture weekend',body:'Join our village for a weekend of art, nature and community.',assets:['festival']},culture)).status,200);
