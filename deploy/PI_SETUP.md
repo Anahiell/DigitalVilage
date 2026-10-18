@@ -72,6 +72,8 @@ Restart after changing settings. Host → setup → **Send one delivery test** s
 node deploy/doctor.mjs --public --mail your-address
 ```
 
+The encrypted `mail_jobs` table is part of the existing database and its consistent backups. It resumes pending requests after restart, uses bounded delayed retries for up to 15 minutes, and removes completed/expired payloads. Preserve `PIN_PEPPER` when moving the database: it is also the queue encryption secret. A queued registration reserves its role; a permanent failure/expiry releases an unused account. Host rescue cancels a delayed PIN replacement. HTTP 202 and a queued test are explicitly unconfirmed, and `doctor --mail` exits with attention required for that state. No provider webhook is provisioned by this update; recipient-server delivery must be checked in the provider dashboard or the actual inbox.
+
 Ordinary `npm run doctor` never sends mail. Provider acceptance is not inbox confirmation. Check actual receipt and a registration PIN/resend before inviting the room. Gmail limits, recipient filtering and a provider outage remain possible. Host in-person enrolment and emergency PIN issuance work without mail credentials.
 
 ## Health, reboot and recovery

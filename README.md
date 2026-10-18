@@ -46,8 +46,10 @@ The default prepared route uses **Tailscale Funnel on HTTPS port 8443**, preserv
 
 - Gmail SMTP: set both `SMTP_EMAIL` and `SMTP_APP_PASSWORD` for a dedicated account. `SMTP_HOST` / `SMTP_PORT` optionally support another SMTP server.
 - Optional Resend HTTPS sender: set `RESEND_API_KEY` and `EMAIL_FROM` on your own verified sending domain. If both providers are configured, Resend is primary and SMTP is the real fallback.
-- Temporary errors receive bounded retries and timeouts. HTTP retries reuse an idempotency key. Permanent authentication errors remain visible. Failed real delivery never becomes fake rehearsal success.
-- Host diagnostics distinguish sending, provider acceptance, failure, interruption and rehearsal. Logs contain delivery metadata, not PIN bodies.
+- Outgoing mail is saved in an **encrypted SQLite queue before dispatch**. Temporary failures retry with increasing delays for up to 15 minutes, including after a process restart. The same request ID is reused for Resend idempotency; SMTP keeps a stable Message-ID, which does not guarantee deduplication by the recipient. Permanent failures stop. Completed or expired payloads are removed. Keep the existing `PIN_PEPPER`: it also protects the queue.
+- HTTP **202 / queued** means a saved pending request, never successful delivery. A queued registration keeps its place; expiry or permanent failure releases an unused registration. A failed/pending replacement leaves the old PIN usable until the provider accepts the new one. Host rescue cancels a delayed replacement so it cannot overwrite the hand-delivered PIN.
+- Round-five notification jobs are saved as one batch, so a restart cannot silently drop its unsent recipients. Requests not yet sending are cancelled after the workshop ends. A real job cannot become fake rehearsal success after credentials are removed.
+- Host diagnostics distinguish sending, provider acceptance, failure, interruption and rehearsal. Logs contain delivery metadata/provider IDs, not PIN bodies. The host sees the pending count; the doctor treats a queued delivery test as unconfirmed.
 - Provider acceptance **does not prove inbox receipt**. Check inbox/spam from a real phone before registration. A lost acknowledgment can also cause duplicate mail across providers; use the most recent successful PIN. The in-person host entry route keeps the workshop usable without email.
 
 ## Timing and facilitation

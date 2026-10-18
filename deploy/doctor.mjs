@@ -25,6 +25,7 @@ if(online){
   note('Host account',login.ok&&!!cookie,'Host authentication checked without printing the password.');
   if(cookie){
    const running=await (await fetch(local+'/api/state',{headers:{Cookie:cookie}})).json();
+   note('Saved outgoing mail',true,`${running.mailQueue?.pending||0} pending; ${running.mailQueue?.active||0} processing. Pending is not delivery confirmation.`);
    note('Running sender matches configuration',running.emailMode===mail.mode,'Restart the service after changing sender settings.');
    let expected='';try{expected=new URL(env.PUBLIC_BASE_URL).origin+'/';}catch{}
    note('Running invitation address',!!expected&&running.invitationUrl===expected,'The QR address must match the current public origin.');
@@ -34,7 +35,7 @@ if(online){
    if(mailIndex>=0){
     const email=args[mailIndex+1];if(!email)throw Error('An explicit test recipient is required.');
     const sent=await fetch(local+'/api/admin/test-email',{method:'POST',headers:{'Content-Type':'application/json',Cookie:cookie},body:JSON.stringify({email}),signal:AbortSignal.timeout(65000)});
-    const result=await sent.json();note('Requested test email',sent.ok,result.message||result.error);console.log('Check the recipient inbox/spam folder to confirm receipt.');
+    const result=await sent.json();note('Requested test email',sent.ok&&!result.queued,result.message||result.error);console.log('Check the recipient inbox/spam folder to confirm receipt.');
    }
    await fetch(local+'/api/logout',{method:'POST',headers:{'Content-Type':'application/json',Cookie:cookie},body:'{}'});
   }

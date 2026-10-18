@@ -6,13 +6,14 @@ import {DatabaseSync} from 'node:sqlite';
 import {randomBytes, randomInt, scryptSync, createHash, timingSafeEqual} from 'node:crypto';
 import {VILLAGES,ROLES,INVESTMENTS,ROUNDS,MEDIA_ASSETS,FESTIVAL_TASKS,SECURITY_QUESTIONS} from './data.js';
 import {createMailer,mailConfiguration} from './mailer.js';
+import {createMailQueue} from './mail-queue.js';
 import {generateNews,buildRoundReport,campaignReview,buildWorkshopStories} from './game-content.js';
 const ROOT=process.cwd(), HOST=process.env.HOST||'127.0.0.1',PORT=Number(process.env.PORT||3000);
 const ADMIN_PASSWORD=process.env.ADMIN_PASSWORD||'', PIN_PEPPER=process.env.PIN_PEPPER||'';
 if(!ADMIN_PASSWORD||ADMIN_PASSWORD.includes('CHANGE_ME')||ADMIN_PASSWORD.length<14) throw Error('Set ADMIN_PASSWORD with at least 14 characters in .env');
 if(!PIN_PEPPER||PIN_PEPPER.includes('CHANGE_ME')||PIN_PEPPER.length<20) throw Error('Set PIN_PEPPER with at least 20 random characters in .env');
 const DEV_MAIL=process.env.DEV_EMAIL_OUTBOX==='1';
-const PIN_COOLDOWN_MS=90000, pinDeliveries=new Set(), reservedPins=new Set();
+const PIN_COOLDOWN_MS=90000, pinDeliveries=new Set();
 const mailSettings=mailConfiguration();
 const emailConfigured=()=>mailSettings.configured;
 const ipBuckets=new Map();
@@ -110,7 +111,7 @@ const clean=s=>String(s??'').trim();
 const EMAIL_PATTERN=/^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
 function hashPin(pin){const salt=randomBytes(16).toString('hex');return `${salt}:${scryptSync(pin+PIN_PEPPER,salt,32).toString('hex')}`;}
 function verifyPin(pin,stored){const [salt,hash]=(stored||'').split(':');if(!salt||!hash)return false;const expected=Buffer.from(hash,'hex'), actual=scryptSync(pin+PIN_PEPPER,salt,32);return expected.length===actual.length&&timingSafeEqual(expected,actual);}
-function generatePin(){for(let i=0;i<30;i++){const pin=String(randomInt(100000,1000000)),fingerprint=sha(PIN_PEPPER+pin);if(!reservedPins.has(fingerprint)&&!row('SELECT id FROM players WHERE pin_lookup=?',fingerprint)) return {pin,fingerprint};}throw httpError(503,'Could not generate PIN');}
+function generatePin(){for(let i=0;i<30;i++){const pin=String(randomInt(100000,1000000)),fingerprint=sha(PIN_PEPPER+pin);if(!row('SELECT id FROM players WHERE pin_lookup=?',fingerprint)&&!row('SELECT id FROM mail_jobs WHERE pin_lookup=?',fingerprint)) return {pin,fingerprint};}throw httpError(503,'Could not generate PIN');}
 function parseCookie(req){const raw=req.headers.cookie||'';const m=raw.match(/(?:^|;\s*)dv_session=([a-f0-9]{64})/);return m?.[1]||'';}
 function auth(req){const t=parseCookie(req);if(!t)return null;const s=row('SELECT * FROM sessions WHERE token_hash=? AND expires_at>?',sha(t),at());if(!s)return null;if(s.admin)return {admin:true};const player=row('SELECT id,name,email,village_id,role,verified,consent_email FROM players WHERE id=?',s.player_id);return player?{admin:false,player}:null;}
 function cookie(token,req){const secure=(process.env.PUBLIC_BASE_URL||'').startsWith('https://')||(process.env.TRUST_PROXY==='1'&&req.headers['x-forwarded-proto']==='https')||req.socket.encrypted;return `dv_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Number(process.env.SESSION_DAYS||2)*86400}${secure?'; Secure':''}`;}
@@ -229,15 +230,27 @@ function closeRound(reason='manual',timestamp=at()){
  recordBaseline(g.round);return report;
 }
 
-const mailer=createMailer({
- record:entry=>run('INSERT INTO mail_deliveries VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,provider=excluded.provider,attempts=excluded.attempts,error_code=excluded.error_code,updated_at=excluded.updated_at',entry.id,entry.to,entry.kind,entry.status,entry.provider,entry.attempts,entry.code,entry.at,at()),
- writeOutbox:(to,subject,body)=>run('INSERT INTO outbox(email,subject,body,at) VALUES(?,?,?,?)',to,subject,body,at())
+// Keep the original audit schema compatible with the previous release for rollback.
+db.exec('CREATE TABLE IF NOT EXISTS mail_provider_refs(delivery_id TEXT PRIMARY KEY REFERENCES mail_deliveries(id) ON DELETE CASCADE,provider_id TEXT NOT NULL)');
+function recordDelivery(entry){
+ run('INSERT INTO mail_deliveries(id,email,kind,status,provider,attempts,error_code,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,provider=excluded.provider,attempts=excluded.attempts,error_code=excluded.error_code,updated_at=excluded.updated_at',entry.id,entry.to,entry.kind,entry.status,entry.provider,entry.attempts,entry.code,entry.at,at());
+ if(entry.providerId)run('INSERT INTO mail_provider_refs VALUES(?,?) ON CONFLICT(delivery_id) DO UPDATE SET provider_id=excluded.provider_id',entry.id,entry.providerId);
+}
+const mailer=createMailer({record:recordDelivery,writeOutbox:(to,subject,body)=>run('INSERT INTO outbox(email,subject,body,at) VALUES(?,?,?,?)',to,subject,body,at())});
+const mailQueue=createMailQueue({db,secret:PIN_PEPPER,mailer,record:recordDelivery,
+ eligible:context=>{if(!context.playerId)return true;const p=row('SELECT * FROM players WHERE id=?',context.playerId);if(!p)return false;if(context.action==='exercise')return !!p.verified&&!!p.consent_email&&getGame().round===5&&getGame().phase!=='ended';return p.pin_lookup===context.expectedLookup;},
+ onAccepted:context=>{if(context.action==='resend')run('UPDATE players SET pin_hash=?,pin_lookup=?,attempts=0,locked_until=0,pin_sent_at=? WHERE id=? AND pin_lookup=?',context.pinHash,context.pinLookup,at(),context.playerId,context.expectedLookup);else if(context.action==='registration')run('UPDATE players SET pin_sent_at=? WHERE id=? AND pin_lookup=?',at(),context.playerId,context.expectedLookup);},
+ onFailed:context=>{if(context.action==='registration')run('DELETE FROM players WHERE id=? AND verified=0 AND pin_lookup=?',context.playerId,context.expectedLookup);},
+ onActive:job=>{if(job.kind==='pin'&&job.player_id)pinDeliveries.add(job.player_id);},
+ onIdle:job=>{if(job.kind==='pin'&&job.player_id)pinDeliveries.delete(job.player_id);},
+ onError:()=>console.error('Mail queue could not complete a database operation; the request remains saved.')
 });
-let activeMailRequests=0;
-async function sendEmail(to,subject,body,kind='pin'){activeMailRequests++;try{return await mailer.send({to,subject,body,kind});}finally{activeMailRequests--;}}
-run("UPDATE mail_deliveries SET status='interrupted',error_code='server_restart',updated_at=? WHERE status='sending'",at());
+db.exec('CREATE TRIGGER IF NOT EXISTS clear_player_mail_jobs AFTER DELETE ON players BEGIN DELETE FROM mail_jobs WHERE player_id=OLD.id; END;');
+run("UPDATE mail_deliveries SET status=CASE WHEN id IN (SELECT id FROM mail_jobs) THEN 'queued' ELSE 'interrupted' END,error_code='server_restart',updated_at=? WHERE status='sending'",at());
+async function sendEmail(to,subject,body,kind='test',context={}){return mailQueue.wait(mailQueue.enqueue({to,subject,body,kind},context));}
 
-function newPin(id){const {pin,fingerprint}=generatePin();run('UPDATE players SET pin_hash=?,pin_lookup=?,attempts=0,locked_until=0,pin_sent_at=? WHERE id=?',hashPin(pin),fingerprint,at(),id);return pin;}
+
+function newPin(id){mailQueue.cancelPlayer(id);const {pin,fingerprint}=generatePin();run('UPDATE players SET pin_hash=?,pin_lookup=?,attempts=0,locked_until=0,pin_sent_at=? WHERE id=?',hashPin(pin),fingerprint,at(),id);return pin;}
 function retryError(message,seconds){return Object.assign(httpError(429,message),{retryAfter:seconds});}
 async function resendPin(value){
  const email=clean(value).toLowerCase();
@@ -246,19 +259,14 @@ async function resendPin(value){
  const p=row('SELECT * FROM players WHERE email=?',email);
  const message=mailSettings.real?'If this email is registered, check your inbox and spam folder for a new PIN. If nothing arrives, check the address or ask the host.':'Rehearsal mode: if this email is registered, ask the host for the new PIN from the test outbox. No real email is sent.';
  if(!p)return {ok:true,message,retryAfter:90};
- if(pinDeliveries.has(p.id))throw retryError('A PIN request is still being processed. Please wait.',2);
+ if(pinDeliveries.has(p.id)||mailQueue.pendingPlayer(p.id))throw retryError('Your PIN request is saved and still being processed. Check your inbox/spam or ask the host for a private PIN.',10);
  const remaining=Math.ceil((p.pin_sent_at+PIN_COOLDOWN_MS-at())/1000);
  if(remaining>0)throw retryError(`Please wait ${remaining} seconds before requesting another PIN. Check your inbox and spam folder.`,remaining);
  const {pin,fingerprint}=generatePin(),hash=hashPin(pin);
- pinDeliveries.add(p.id);reservedPins.add(fingerprint);
- try{
-  const sent=await sendEmail(p.email,'Your Digital Village login PIN',`Your new Digital Village login PIN is: ${pin}\n\nKeep it private. Your previous PIN stops working when this request succeeds.`);
-  if(!sent)throw httpError(503,'The email service could not send a new PIN. Your previous PIN still works. Try again or ask the host.');
-  // Keep the existing PIN valid until the mail server accepts the replacement.
-  const changed=run('UPDATE players SET pin_hash=?,pin_lookup=?,attempts=0,locked_until=0,pin_sent_at=? WHERE id=?',hash,fingerprint,at(),p.id);
-  if(!changed.changes)throw httpError(409,'This account is no longer available. Ask the host.');
-  return {ok:true,message,retryAfter:90};
- }finally{pinDeliveries.delete(p.id);reservedPins.delete(fingerprint);}
+ const result=await sendEmail(p.email,'Your Digital Village login PIN',`Your new Digital Village login PIN is: ${pin}\n\nKeep it private. Your previous PIN stops working after the email service accepts the replacement.`,'pin',{action:'resend',playerId:p.id,expectedLookup:p.pin_lookup,pinLookup:fingerprint,pinHash:hash});
+ if(result.status==='queued')return {ok:true,queued:true,message:'Your PIN request is saved. We are retrying delivery for up to 15 minutes, including after a server restart. Your previous PIN still works until the replacement is accepted. Ask the host if you need immediate entry.',retryAfter:10};
+ if(result.status!=='accepted')throw httpError(503,'The email service could not send a new PIN. Your previous PIN still works. Try again or ask the host.');
+ return {ok:true,message,retryAfter:90};
 }
 function invitationUrl(){
  try{const url=new URL(process.env.PUBLIC_BASE_URL);if(!['http:','https:'].includes(url.protocol)||url.username||url.password)return '';return url.origin+'/';}catch{return '';}
@@ -266,34 +274,34 @@ function invitationUrl(){
 let securityDelivery=null;
 async function sendSecurityNotifications(){
  const target=invitationUrl();
- if(!target){logEvent(5,null,'mail','Security exercise emails not sent','The public game address is missing. Use the on-site security lab.');return;}
- const people=all('SELECT name,email FROM players WHERE verified=1 AND consent_email=1');let sent=0;
+ if(!target){tx(()=>{run('UPDATE game SET security_sent=1 WHERE id=1');logEvent(5,null,'mail','Security exercise emails not sent','The public game address is missing. Use the on-site security lab.');});return;}
+ const people=all('SELECT id,name,email FROM players WHERE verified=1 AND consent_email=1');
+ const jobs=tx(()=>{if(getGame().security_sent)return [];const pending=people.map(x=>mailQueue.enqueue({to:x.email,subject:'Important: Digital Village account notification',body:`Hello ${x.name},\n\nA new security message is waiting for you. Review it here: ${target}?security=1\n\nThis is part of the consented Digital Village educational security simulation. No passwords will be requested.`,kind:'exercise'},{action:'exercise',playerId:x.id}));run('UPDATE game SET security_sent=1 WHERE id=1');return pending;});
  for(let i=0;i<people.length;i+=3){
-  const results=await Promise.all(people.slice(i,i+3).map(x=>sendEmail(x.email,'Important: Digital Village account notification',`Hello ${x.name},\n\nA new security message is waiting for you. Review it here: ${target}?security=1\n\nThis is part of the consented Digital Village educational security simulation. No passwords will be requested.`,'exercise')));
-  sent+=results.filter(Boolean).length;
+  await Promise.all(jobs.slice(i,i+3).map(id=>mailQueue.wait(id)));
  }
- logEvent(5,null,'mail','Security exercise email status',`${sent}/${people.length} messages accepted by the email service. The on-site security lab remains available to everyone.`);
+ if(!jobs.length)return;
+ const statuses=jobs.map(id=>row('SELECT status FROM mail_deliveries WHERE id=?',id)?.status),sent=statuses.filter(s=>s==='accepted').length,queued=statuses.filter(s=>['queued','sending'].includes(s)).length,rehearsal=statuses.filter(s=>s==='rehearsal').length;
+ logEvent(5,null,'mail','Security exercise email status',`${sent}/${people.length} messages accepted by the email service; ${queued} pending; ${rehearsal} rehearsal only. The on-site security lab remains available to everyone.`);
 }
-function reservePlayer(payload){let name=clean(payload.name),email=clean(payload.email).toLowerCase(),village=clean(payload.village),role=clean(payload.role);
+function reservePlayer(payload,afterReserve=()=>{}){let name=clean(payload.name),email=clean(payload.email).toLowerCase(),village=clean(payload.village),role=clean(payload.role);
  if(name.length<2||name.length>70||!EMAIL_PATTERN.test(email)||email.length>150)throw httpError(400,'Enter a valid name and email');
  if(!VILLAGES.some(v=>v.id===village)||!ROLES.some(r=>r.id===role))throw httpError(400,'Choose a village and role');
  const id=randomBytes(12).toString('hex');const {pin,fingerprint}=generatePin();
- try{tx(()=>{run('DELETE FROM players WHERE verified=0 AND created_at<?',at()-25*60000);
- run('INSERT INTO players(id,name,email,village_id,role,pin_hash,pin_lookup,consent_email,created_at,pin_sent_at) VALUES(?,?,?,?,?,?,?,?,?,?)',id,name,email,village,role,hashPin(pin),fingerprint,payload.consentEmail===true?1:0,at(),at());});}
+ try{tx(()=>{run('DELETE FROM players WHERE verified=0 AND created_at<? AND id NOT IN (SELECT player_id FROM mail_jobs WHERE player_id IS NOT NULL)',at()-25*60000);
+ run('INSERT INTO players(id,name,email,village_id,role,pin_hash,pin_lookup,consent_email,created_at,pin_sent_at) VALUES(?,?,?,?,?,?,?,?,?,?)',id,name,email,village,role,hashPin(pin),fingerprint,payload.consentEmail===true?1:0,at(),at());afterReserve({id,pin,fingerprint,name,email});});}
  catch(e){if(/UNIQUE/i.test(e.message))throw httpError(409,'Email already registered or that role is occupied');throw e;}
  return {id,pin,name,email};
 }
 async function register(payload){
  if(!emailConfigured())throw httpError(503,'Email delivery is not configured. Ask the host for help.');
- const {id,pin,name,email}=reservePlayer(payload);
- pinDeliveries.add(id);
- try{
-  const ok=await sendEmail(email,'Your Digital Village login PIN',`Welcome, ${name}!\n\nYour Digital Village login PIN is: ${pin}\n\nUse your email and PIN to sign in. Keep this PIN private.\n\nThis message is for the educational Digital Village simulation.`);
-  if(!ok){run('DELETE FROM players WHERE id=? AND verified=0',id);throw httpError(503,'Could not send your PIN. Your place has been released; try again or ask the host.');}
-  run('UPDATE players SET pin_sent_at=? WHERE id=?',at(),id);
-  const message=mailSettings.real?'Your PIN email has been sent. Check your inbox and spam folder.':'Rehearsal mode: your PIN is in the host test outbox. Ask the host for your code; no real email is sent.';
-  return {ok:true,email,message,retryAfter:90};
- }finally{pinDeliveries.delete(id);}
+ let job;
+ const {email}=reservePlayer(payload,account=>{job=mailQueue.enqueue({to:account.email,subject:'Your Digital Village login PIN',body:`Welcome, ${account.name}!\n\nYour Digital Village login PIN is: ${account.pin}\n\nUse your email and PIN to sign in. Keep this PIN private.\n\nThis message is for the educational Digital Village simulation.`,kind:'pin'},{action:'registration',playerId:account.id,expectedLookup:account.fingerprint,pinLookup:account.fingerprint});});
+ const result=await mailQueue.wait(job);
+ if(result.status==='queued')return {ok:true,queued:true,email,message:'Your place and PIN request are saved. Delivery is pending; we will retry for up to 15 minutes, including after a server restart. Do not register again. You can sign in once the email arrives, or ask the host for a private PIN.',retryAfter:10};
+ if(result.status!=='accepted')throw httpError(503,'Could not send your PIN. Your place has been released; try again or ask the host.');
+ const message=mailSettings.real?'The email service accepted your PIN message. Check your inbox and spam folder.':'Rehearsal mode: your PIN is in the host test outbox. Ask the host for your code; no real email is sent.';
+ return {ok:true,email,message,retryAfter:90};
 }
 function login(email,pin,res,req){email=clean(email).toLowerCase();pin=clean(pin);
  const p=row('SELECT * FROM players WHERE email=?',email);if(!p||!/^\d{6}$/.test(pin))throw httpError(401,'Email or PIN incorrect');
@@ -328,7 +336,7 @@ function currentState(a,knownHistory=0){advanceWorld();const g=getGame(),village
  if(g.phase==='ended')base.workshopStories=buildWorkshopStories(all('SELECT data FROM round_reports ORDER BY round').map(r=>JSON.parse(r.data)));
  if(person)base.helpCooldowns=Object.fromEntries(all("SELECT details,MAX(at) AS at FROM events WHERE kind='help' AND details LIKE ? AND at>? GROUP BY details",person.id+':%',at()-60000).map(e=>[e.details.slice(person.id.length+1),e.at+60000]));
  if(person)base.me=person;
- if(a.admin){base.admin=true;base.invitationUrl=invitationUrl();base.emailMode=mailSettings.mode;base.mailConfiguration={mode:mailSettings.mode,real:mailSettings.real,configured:mailSettings.configured,issues:mailSettings.issues};base.mailDeliveries=all('SELECT email,kind,status,provider,attempts,error_code,updated_at FROM mail_deliveries ORDER BY updated_at DESC LIMIT 12');base.outbox=DEV_MAIL?all('SELECT id,email,subject,body,at FROM outbox ORDER BY id DESC LIMIT 50'):[];base.stats={registered:base.people.length,verified:base.people.filter(p=>p.verified).length,active:base.people.filter(p=>p.last_seen>at()-35000).length};}
+ if(a.admin){base.admin=true;base.invitationUrl=invitationUrl();base.emailMode=mailSettings.mode;base.mailConfiguration={mode:mailSettings.mode,real:mailSettings.real,configured:mailSettings.configured,issues:mailSettings.issues};base.mailDeliveries=all("SELECT d.email,d.kind,d.status,d.provider,COALESCE(r.provider_id,'') AS provider_id,d.attempts,d.error_code,d.updated_at FROM mail_deliveries d LEFT JOIN mail_provider_refs r ON r.delivery_id=d.id ORDER BY d.updated_at DESC LIMIT 12");base.mailQueue={pending:row('SELECT COUNT(*) AS n FROM mail_jobs').n,active:mailQueue.active};base.outbox=DEV_MAIL?all('SELECT id,email,subject,body,at FROM outbox ORDER BY id DESC LIMIT 50'):[];base.stats={registered:base.people.length,verified:base.people.filter(p=>p.verified).length,active:base.people.filter(p=>p.last_seen>at()-35000).length};}
  return base;
 }
 function canInvest(p){return ['mayor','finance','digital'].includes(p.role);}
@@ -373,7 +381,7 @@ async function doAction(a,body){advanceWorld();const op=clean(body.op),g=getGame
     if(next===4)addTasks('blue');
     logEvent(next,null,'round',`Round ${next} started`,ROUNDS[next-1].name);recordBaseline(next);
    });
-   if(next===5){run('UPDATE game SET security_sent=1 WHERE id=1');securityDelivery=sendSecurityNotifications().catch(e=>console.error('Security notification batch failed:',e.message)).finally(()=>{securityDelivery=null;});}
+   if(next===5){securityDelivery=sendSecurityNotifications().catch(e=>console.error('Security notification batch failed:',e.message)).finally(()=>{securityDelivery=null;});}
   }
   if(op==='pause'&&g.phase==='playing')run("UPDATE game SET phase='paused',elapsed_ms=? WHERE id=1",roundElapsed(g));
   if(op==='resume'&&g.phase==='paused'){
@@ -485,23 +493,22 @@ async function handler(req,res){try{
   if(req.method!=='POST')throw httpError(405,'Method not allowed');
   const origin=req.headers.origin;if(origin){const o=new URL(origin);const expected=(process.env.PUBLIC_BASE_URL?new URL(process.env.PUBLIC_BASE_URL).host:req.headers.host);if(o.host!==expected)throw httpError(403,'Invalid request origin');}
   const b=await bodyJson(req);
-  if(path==='/api/register'){throttle(req,'register',80,3600000);return json(res,200,await register(b));}
+  if(path==='/api/register'){throttle(req,'register',80,3600000);const result=await register(b);return json(res,result.queued?202:200,result);}
   if(path==='/api/login'){throttle(req,'login',300,900000);return json(res,200,login(b.email,b.pin,res,req));}
   if(path==='/api/admin/login'){
-   throttle(req,'admin',6,900000);
    const inp=Buffer.from(clean(b.password)),exp=Buffer.from(ADMIN_PASSWORD);
-   if(inp.length!==exp.length||!timingSafeEqual(inp,exp))throw httpError(401,'Invalid host password');
+   if(inp.length!==exp.length||!timingSafeEqual(inp,exp)){throttle(req,'admin',6,900000);throw httpError(401,'Invalid host password');}
    startSession(res,req,null,true);return json(res,200,{ok:true});
   }
   if(path==='/api/logout'){const token=parseCookie(req);if(token)run('DELETE FROM sessions WHERE token_hash=?',sha(token));res.setHeader('Set-Cookie','dv_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');return json(res,200,{ok:true});}
   if(path==='/api/action')return json(res,200,await doAction(a,b));
   if(path==='/api/admin/delete-data'){
    requireAdmin(a);throttle(req,'wipe-data',3,3600000);
-   if(pinDeliveries.size||securityDelivery||activeMailRequests)throw httpError(409,'Email is being processed. Wait for it to finish before erasing accounts.');
+   if(pinDeliveries.size||securityDelivery||mailQueue.active)throw httpError(409,'Email is being processed. Wait for it to finish before erasing accounts.');
    if(b.confirm!=='DELETE ALL PLAYER DATA')throw httpError(400,'Confirmation mismatch');
    const got=Buffer.from(clean(b.password)),expected=Buffer.from(ADMIN_PASSWORD);
    if(got.length!==expected.length||!timingSafeEqual(got,expected))throw httpError(403,'Host password is incorrect');
-   tx(()=>{for(const table of ['mail_deliveries','security_answers','round_reports','round_starts','crisis_losses','news_choices','news_context','news_sources','news','posts','tasks','investments','snapshots','events','outbox','sessions','players'])run(`DELETE FROM ${table}`);for(const v of VILLAGES)run('UPDATE villages SET budget=?,youth=?,internet=?,education=?,services=?,jobs=?,trust=? WHERE id=?',v.budget,v.youth,v.internet,v.education,v.services,v.jobs,v.trust,v.id);run("UPDATE game SET round=0,phase='waiting',started_at=0,elapsed_ms=0,last_sim_at=0,crisis_fired=0,tickets_fired=0,news_revealed=0,media_revealed=0,festival_resolved=0,security_sent=0,last_dynamic_event_at=0 WHERE id=1");});
+   tx(()=>{for(const table of ['mail_jobs','mail_provider_refs','mail_deliveries','security_answers','round_reports','round_starts','crisis_losses','news_choices','news_context','news_sources','news','posts','tasks','investments','snapshots','events','outbox','sessions','players'])run(`DELETE FROM ${table}`);for(const v of VILLAGES)run('UPDATE villages SET budget=?,youth=?,internet=?,education=?,services=?,jobs=?,trust=? WHERE id=?',v.budget,v.youth,v.internet,v.education,v.services,v.jobs,v.trust,v.id);run("UPDATE game SET round=0,phase='waiting',started_at=0,elapsed_ms=0,last_sim_at=0,crisis_fired=0,tickets_fired=0,news_revealed=0,media_revealed=0,festival_resolved=0,security_sent=0,last_dynamic_event_at=0 WHERE id=1");});
    res.setHeader('Set-Cookie','dv_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
    return json(res,200,{ok:true});
   }
@@ -516,7 +523,8 @@ async function handler(req,res){try{
    if(!EMAIL_PATTERN.test(email)||email.length>150)throw httpError(400,'Enter the address where you will check the test message.');
    if(!mailSettings.real)throw httpError(503,'Configure a real sender before testing delivery. Rehearsal outbox is not real email.');
    const sent=await sendEmail(email,'Digital Village — delivery check','This is the requested Digital Village delivery test. If you can read this message, confirm receipt in the host checklist. No PIN is included.','test');
-   if(!sent)throw httpError(503,'The provider did not accept the test email. Check the delivery diagnostics below.');
+   if(sent.status==='queued')return json(res,202,{ok:true,queued:true,message:'Test request saved; delivery is pending and will be retried for up to 15 minutes. This is not a successful delivery yet.'});
+   if(sent.status!=='accepted')throw httpError(503,'The provider did not accept the test email. Check the delivery diagnostics below.');
    return json(res,200,{ok:true,message:'The email service accepted the test. Confirm that it actually arrived in your inbox or spam folder.'});
   }
   if(path==='/api/admin/issue-pin'){
@@ -526,7 +534,7 @@ async function handler(req,res){try{
    return json(res,200,{ok:true,pin,email:p.email});
   }
   if(path==='/api/resend'){
-   throttle(req,'resend',50,900000);return json(res,200,await resendPin(b.email));
+   throttle(req,'resend',50,900000);const result=await resendPin(b.email);return json(res,result.queued?202:200,result);
   }
   throw httpError(404,'Unknown endpoint');
  }
@@ -541,9 +549,12 @@ if(recovered.phase==='playing')tx(()=>{
  run("UPDATE game SET phase='paused',elapsed_ms=? WHERE id=1",Math.max(0,recovered.last_sim_at-recovered.started_at));
  logEvent(recovered.round,null,'recovery','Server restarted — simulation paused','The host can resume from the last saved simulation tick.');
 });
+if(getGame().round===5&&!getGame().security_sent&&getGame().phase!=='ended')securityDelivery=sendSecurityNotifications().catch(()=>console.error('Security notification setup remains incomplete.')).finally(()=>{securityDelivery=null;});
 const worldClock=process.env.NODE_ENV==='test'?null:setInterval(()=>{try{advanceWorld();}catch(e){console.error('World tick failed:',e.message);}},1000);
 worldClock?.unref();
 const server=createServer(handler);
-server.on('close',()=>clearInterval(worldClock));
+const mailClock=process.env.NODE_ENV==='test'?null:setInterval(()=>void mailQueue.drain().catch(()=>console.error('Mail queue check failed; saved requests remain pending.')),1000);
+mailClock?.unref();
+server.on('close',()=>{clearInterval(worldClock);clearInterval(mailClock);mailQueue.close();});
 if(process.env.NODE_ENV!=='test')server.listen(PORT,HOST,()=>console.log(`Digital Village listening at http://${HOST}:${PORT}; dev email outbox: ${DEV_MAIL?'on':'off'}`));
 export {handler,server,db,advanceWorld};

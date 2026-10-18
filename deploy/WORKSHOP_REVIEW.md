@@ -15,15 +15,18 @@ This update reviews the complete five-round experience and prepares the existing
 | Reports | Immutable per-round metrics/deltas, real names/positions, decisions/incidents and factual stories. Archive and projector support; whole-workshop story at finish. |
 | Interface | Automatic round navigation, persistent disclosure panels/drafts, responsive report tables, keyboard focus/skip link, native private PIN dialog, honest connection and frozen states. |
 | Email | Bounded retry/timeouts, optional HTTPS Resend with idempotency, real SMTP fallback, visible delivery metadata, requested real test mail, no fake success when credentials fail. |
+| Durable mail | Encrypted SQLite jobs, delayed retries, stable provider request IDs and process-restart recovery. Queued is distinct from accepted. Expiry releases unused roles; rescue cancels delayed replacements. Real jobs cannot fall into a rehearsal outbox after a configuration change. |
+| Host diagnostics | Valid logins no longer consume failed-password attempts, avoiding a 15-minute lockout caused by repeated doctor runs. Wrong passwords remain rate limited. |
 | Entry fallback | Authenticated host can enrol a present participant and hand over a private PIN without any email provider. Existing accounts retain emergency PIN recovery. |
 | Pi launch | Preserve robot's existing HTTPS 443 route; use separate game HTTPS 8443. Private consistent backup, isolated release, tests before switch, generated systemd unit, local-health rollback and public doctor. |
 
 ## Verification
 
-- `npm test`: isolated API/integration, mail and deployment checks. Covers all rounds, exact crisis losses, absent/stale clients, immutable reports, security score, both campaign attribution outcomes, concurrent publication, full festival completion/role workload/cooldown, restart and legacy schema migration, synthetic mail failures and private backup/configuration handling. A separate check proves host entry with outbox and all real providers disabled. No real mail is sent.
+- `npm test`: 23 isolated API/integration, mail and deployment checks. Covers all rounds, exact crisis losses, absent/stale clients, immutable reports, security score, both campaign attribution outcomes, concurrent publication, full festival completion/role workload/cooldown, restart and legacy schema migration, synthetic mail failures and private backup/configuration handling. A separate check proves host entry with outbox and all real providers disabled. Forced-process-termination checks cover registration and replacement recovery, provider acknowledgment followed by local transaction failure, encrypted payloads, expiry, cancellation, stale jobs and real-to-rehearsal prevention. No real mail is sent.
 - `npm run load-test`: 30 synthetic users behind one IP, 431 requests and zero errors in the local rehearsal. This measures this test environment, not the Pi or venue Wi-Fi.
 - Full Chromium rehearsal: host login and in-person entry/private PIN, real QR independently decoded, mobile player and Culture Ambassador, crisis/pause/resume, all five transitions and reports, source disclosures retained across polling, true/fake reveal, concurrent editing conflict/reload, credited campaign, festival help and urgent tickets, four saved security answers, overall story and projector. No JavaScript errors/CSP violations or mobile page overflow observed.
-- Visual inspection: host controls, mobile round report and final projector results. Tables scroll horizontally inside their panel on narrow phones.
+- Additional queue UI rehearsal: mobile queued-registration explanation and retained email, host pending count, rescue cancelling the delayed PIN, then successful phone login. No page overflow or script errors.
+- Visual inspection: host controls, mobile round report, queued mail feedback and final projector results. Tables scroll horizontally inside their panel on narrow phones.
 - Node syntax, shell syntax and whitespace checks. Dependency lockfile is updated and install remains reproducible.
 
 ## Required on-device confirmation

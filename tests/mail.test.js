@@ -23,3 +23,8 @@ test('only an explicit rehearsal configuration creates test mail',async()=>{
  let outbox=0;const mail=createMailer({env:{DEV_EMAIL_OUTBOX:'1'},writeOutbox:()=>outbox++});assert.equal(await mail.send({to:'person@example.invalid',subject:'PIN',body:'123456'}),true);assert.equal(outbox,1);
  assert.equal(mailConfiguration({RESEND_API_KEY:'partial'}).configured,false);assert.ok(mailConfiguration({RESEND_API_KEY:'partial'}).issues.length);
 });
+
+test('a local audit failure after provider acceptance does not become a permanent email rejection or trigger another provider',async()=>{
+ let fallback=0;const mail=createMailer({env:{...smtpEnv,...{RESEND_API_KEY:'synthetic-key',EMAIL_FROM:'Village <village@example.invalid>'}},request:async()=>new Response('{"id":"accepted-id"}',{status:200}),record:entry=>{if(entry.status==='accepted')throw Error('Synthetic audit database failure');},transportFactory:()=>({async sendMail(){fallback++;return {accepted:['person@example.invalid']};}})});
+ await assert.rejects(mail.sendDetailed({to:'person@example.invalid',subject:'PIN',body:'654321'}),/Synthetic audit/);assert.equal(fallback,0);
+});

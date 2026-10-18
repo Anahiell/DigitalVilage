@@ -34,30 +34,36 @@ export function createMailer({env=process.env,record=()=>{},writeOutbox=()=>{},r
  function failureCode(error){
   if(error.code==='EAUTH'||error.responseCode===535)return 'authentication_failed';
   if(error.code==='ETIMEDOUT'||error.name==='TimeoutError')return 'connection_timeout';
-  if(error.code==='ECONNECTION'||error.code==='ESOCKET')return 'connection_failed';
+  if(['ECONNECTION','ESOCKET','ECONNRESET','ECONNREFUSED','ENETUNREACH','EHOSTUNREACH','EAI_AGAIN','EDNS'].includes(error.code))return 'connection_failed';
   if(typeof error.code==='string'&&/^[a-z_]+$/.test(error.code))return error.code;
   return 'provider_rejected';
  }
- async function send({to,subject,body,kind='pin'}){
-  const job={id:randomUUID(),to,subject,body,kind},startedAt=Date.now();let attempts=0,lastCode='not_configured';
+ async function sendDetailed({id=randomUUID(),to,subject,body,kind='pin',createdAt=Date.now(),attemptOffset=0}){
+  const job={id,to,subject,body,kind},startedAt=createdAt;let attempts=attemptOffset,lastCode='not_configured',retryable=false;
   record({id:job.id,to,kind,status:'sending',provider:config.mode,attempts,code:'',at:startedAt});
-  if(config.rehearsal){writeOutbox(to,subject,body);record({id:job.id,to,kind,status:'rehearsal',provider:'outbox',attempts:1,code:'',at:startedAt});return true;}
+  if(config.rehearsal){writeOutbox(to,subject,body);record({id:job.id,to,kind,status:'rehearsal',provider:'outbox',attempts:attempts+1,code:'',at:startedAt});return {ok:true,attempts:attempts+1};}
   const providers=[...(config.resend?['resend']:[]),...(config.smtp?['smtp']:[])];
   for(const provider of providers){
    for(let n=0;n<2;n++){
     attempts++;
+    let providerId;
     try{
-     await attempt(provider,job);
-     record({id:job.id,to,kind,status:'accepted',provider,attempts,code:'',at:startedAt});return true;
+     providerId=await attempt(provider,job);
     }catch(error){
      lastCode=failureCode(error);
-     const transient=error.retryable||['ETIMEDOUT','ECONNECTION','ESOCKET'].includes(error.code)||[421,450,451,452].includes(error.responseCode);
+     const transient=error.retryable||['ETIMEDOUT','ECONNECTION','ESOCKET','ECONNRESET','ECONNREFUSED','ENETUNREACH','EHOSTUNREACH','EAI_AGAIN','EDNS'].includes(error.code)||[421,450,451,452].includes(error.responseCode);
+     retryable ||= !!transient;
      if(!transient||n===1)break;
      await wait(error.delay||650);
+     continue;
     }
+    // A local audit failure must not turn an accepted email into a permanent rejection.
+    // Let the durable queue retain and recover this request with its existing key.
+    record({id:job.id,to,kind,status:'accepted',provider,providerId,attempts,code:'',at:startedAt});return {ok:true,attempts,provider,providerId};
    }
   }
-  record({id:job.id,to,kind,status:'failed',provider:config.mode,attempts,code:lastCode,at:startedAt});return false;
+  record({id:job.id,to,kind,status:'failed',provider:config.mode,attempts,code:lastCode,at:startedAt});return {ok:false,attempts,code:lastCode,retryable:retryable||!providers.length};
  }
- return {config,send};
+ const send=async message=>(await sendDetailed(message)).ok;
+ return {config,send,sendDetailed};
 }
