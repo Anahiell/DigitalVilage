@@ -2,7 +2,7 @@
 
 A mobile-first, real-time educational multiplayer strategy for the **RURALEM / Erasmus+ Digital Competences** module. Four villages, up to 32 players, five rounds, and a host-operated control center. Every decision affects a living economy whose metrics are calculated and persisted on the server.
 
-**Status: tested rehearsal MVP, not yet a production-hosted service.** There is no public website or configured email sender until the host supplies hosting, HTTPS, a working SMTP account and privacy information. The project uses no frontend framework and no npm packages for normal development: modern HTML, CSS, JavaScript and a Node.js HTTP server with built-in SQLite.
+**Status: functional workshop MVP.** Public access and real email delivery depend on the running host's HTTPS, SMTP and privacy settings. The project uses modern HTML, CSS, JavaScript and a Node.js HTTP server with built-in SQLite, `qrcode` for invitations, and optional Nodemailer for Gmail delivery. It has no frontend framework.
 
 ## What's implemented
 
@@ -17,6 +17,9 @@ A mobile-first, real-time educational multiplayer strategy for the **RURALEM / E
 - **Round 5**: safe educational inbox + opt-in email notification leading to an on-site awareness page. No imitation of Microsoft or collection of passwords.
 - **Host**: separate login, readiness indicators, start / pause / resume / next, reveal results, grant money, trigger crisis and ticket event, emergency PIN issuance, simulated email outbox for rehearsal, separate projector mode, erase event data.
 - **Persistence**: SQLite in WAL mode; idempotent investment purchase, role reservation constraints, stored history and events; automatic state recovery after restarting the Node server.
+- **Participant support**: the login form keeps the entered email, shows persistent delivery errors and a 90-second resend countdown, and keeps the previous PIN valid if replacement mail fails. Simultaneous replacement requests cannot overwrite each other.
+- **Invitations**: the host dashboard and waiting-room projector show a real scannable QR for `PUBLIC_BASE_URL`, with a copyable invitation link. QR generation happens locally on the server.
+- **Recovery and reflection**: connection loss is visible while the browser reconnects; a restarted server pauses the saved round for the host to resume. **Finish simulation** freezes the economy and displays each village's actual youth change, remaining budget and trust.
 
 ## Run locally
 
@@ -24,11 +27,15 @@ Requires **Node.js 22.13 or newer** (SQLite is an experimental built-in API in N
 
 1. Copy `.env.example` to `.env` and set strong, distinct `ADMIN_PASSWORD` and `PIN_PEPPER`. **Do not commit `.env`.**
 2. For a private rehearsal only, keep `DEV_EMAIL_OUTBOX=1`. The host can see PINs in the development outbox. **Do not expose this mode to participants on a public network.**
-3. Run `npm start` inside this directory. Open `http://127.0.0.1:3000` in a browser. Run `npm test` for the end-to-end API integration test.
+3. Run `npm ci`, then `npm start` inside this directory. Open `http://127.0.0.1:3000` in a browser. Run `npm test` for the API integration and recovery regression tests.
 4. To see the game: open the Host tab, sign in with `ADMIN_PASSWORD`, register players using another browser (or private windows), find their PINs in the host's test outbox, then press **Start the game**.
 5. In a second host tab open `/?projector=1` to show the projector presentation while keeping the dashboard in the first tab.
 
-Install `nodemailer` when real Gmail SMTP is configured: `npm install` (it's an optional dependency). Set `SMTP_EMAIL` and `SMTP_APP_PASSWORD` with a **separate Gmail account** protected by two-step verification and a Google app password. Never store these details in the browser. Test delivery with a single recipient before inviting 30 people. Sending with consumer Gmail can be restricted or delayed; be prepared to issue an emergency PIN. **PUBLIC_BASE_URL** must be the externally reachable HTTPS address used in your messages.
+`npm ci` includes Nodemailer unless optional dependencies are explicitly omitted. Set `SMTP_EMAIL` and `SMTP_APP_PASSWORD` with a **separate Gmail account** protected by two-step verification and a Google app password. Never store these details in the browser. Test delivery with a single recipient before inviting 30 people. Sending with consumer Gmail can be restricted or delayed; be prepared to issue an emergency PIN. **PUBLIC_BASE_URL** must be the externally reachable HTTPS address used in your messages.
+
+SMTP success means the email service accepted the message, not that it has reached the inbox. The participant should check spam as well. A missing sender or SMTP failure returns a specific HTTP 503 error; a resend during cooldown returns HTTP 429 with `Retry-After`. Failed registration releases its village role. A failed replacement leaves the existing PIN intact. The host's rehearsal outbox is explicitly labelled as rehearsal and does not prove real email delivery.
+
+Round-five opt-in notifications are sent in small background batches so a slow mail provider cannot hold up the round change. The world event feed records the accepted-message count. If the public address is missing, no unusable localhost link is sent; the on-site security lab remains available.
 
 ## Public deployment with Railway (persistent storage)
 
@@ -86,6 +93,8 @@ Every 10 seconds of playing time the server calculates:
 - task progress from time, role fit and the number of tasks assigned to a person.
 
 The resulting state is saved in the `villages` table and appended to `snapshots`. A host can issue a grant at any moment. Investments shift future income, costs and migration — not just a single displayed score. UI charts use the actual last 150 stored samples, refresh every 3.5 seconds and draw continuous SVG paths.
+
+Pausing also pauses the countdown to the next random incident. On a server restart, an active round is restored **paused at the last saved simulation tick**, with at most ten seconds of unsaved active time discarded. Offline time does not consume village budgets. The host resumes explicitly. After **Finish simulation**, time and economic results stay fixed; grants, new rounds and resume are rejected. Starting another workshop requires the explicit event-data reset.
 
 This is a *teaching simulation*, not an economic forecast. The parameters are intentionally simplified for short-group discussions; adjust balance after a full rehearsal.
 

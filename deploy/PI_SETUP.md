@@ -6,7 +6,7 @@ This service file assumes the Raspberry Pi account is `robot`, the checkout is a
 
 1. On the Pi, verify `node --version`, `command -v node`, `git --version` and `tailscale version`.
 2. Checkout repository into `~/projects/DigitalVilage`, not into an existing project's directory.
-3. Run `npm install --omit=dev`. Node.js 22.13+ is needed for `node:sqlite`.
+3. Run `npm ci --omit=dev`. Node.js 22.13+ is needed for `node:sqlite`.
 4. Copy `.env.example` to `.env`. Generate two **different random secrets**, at least 14 chars for `ADMIN_PASSWORD` and 20 for `PIN_PEPPER`. Never paste secrets into chat or Git. Set `HOST=127.0.0.1`, `PORT=3000`, `NODE_ENV=production`, `DEV_EMAIL_OUTBOX=0`, `PRIVACY_CONTACT` to a real address. Set private file permissions: `chmod 600 .env`. SMTP can be added later. Registration intentionally returns HTTP 503 until SMTP is configured. Do **not** set development email outbox to 1 while public access is enabled.
 5. Confirm the application works privately before opening a Funnel.
 
@@ -54,7 +54,11 @@ Then check the public HTTPS address **from a phone on mobile data**, not only on
 
 ## Important limitations
 - This deployment uses your Pi's storage and home internet. If the Pi loses power or internet, public access stops; SQLite persists on disk.
-- The project's SQLite timer/game ticks run only while the server is running, with no guarantee of resolving economic time during downtime in exactly the same way. Rehearse recovery.
+- A server restart restores an active round paused at its last saved simulation tick. The host must press **Resume**; budgets and task progress do not advance during the outage. Rehearse this with a test workshop before the event.
 - Gmail SMTP requires the owner's own account/app password; never put credentials in the GitHub repository.
 - If an older site already occupies port 3000, change Digital Village's PORT and Funnel target **consistently**.
 - The existing README also contains security/privacy preflight requirements; this project is a fast prototype, not audited production software.
+
+## Applying a tested code update
+
+Changes committed to GitHub do not themselves update this Pi. While a workshop is in progress, pause the round before updating. Pull the reviewed commit into this checkout, run `npm ci --omit=dev`, then restart `digital-village`. Keep `.env` and `storage/` in place: they hold the host configuration and saved workshop. Check `/healthz`, sign in as host, confirm the invitation QR points to the public game address, and explicitly resume the saved round when the room is ready. Verify one actual PIN email and its resend before inviting participants. Never reset the database as part of a code update.

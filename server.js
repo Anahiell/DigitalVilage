@@ -10,6 +10,8 @@ const ADMIN_PASSWORD=process.env.ADMIN_PASSWORD||'', PIN_PEPPER=process.env.PIN_
 if(!ADMIN_PASSWORD||ADMIN_PASSWORD.includes('CHANGE_ME')||ADMIN_PASSWORD.length<14) throw Error('Set ADMIN_PASSWORD with at least 14 characters in .env');
 if(!PIN_PEPPER||PIN_PEPPER.includes('CHANGE_ME')||PIN_PEPPER.length<20) throw Error('Set PIN_PEPPER with at least 20 random characters in .env');
 const DEV_MAIL=process.env.DEV_EMAIL_OUTBOX==='1';
+const PIN_COOLDOWN_MS=90000, pinDeliveries=new Set(), reservedPins=new Set();
+const emailConfigured=()=>DEV_MAIL||!!(process.env.SMTP_EMAIL&&process.env.SMTP_APP_PASSWORD);
 const ipBuckets=new Map();
 function throttle(req,group,max,windowMs){
  const ip=String((process.env.TRUST_PROXY==='1'?req.headers['x-forwarded-for']:null)||req.socket.remoteAddress||'local').split(',')[0].trim();
@@ -97,9 +99,10 @@ if(!row('SELECT id FROM game WHERE id=1')) tx(()=>{
 });
 const httpError=(status,message)=>Object.assign(new Error(message),{status});
 const clean=s=>String(s??'').trim();
+const EMAIL_PATTERN=/^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
 function hashPin(pin){const salt=randomBytes(16).toString('hex');return `${salt}:${scryptSync(pin+PIN_PEPPER,salt,32).toString('hex')}`;}
 function verifyPin(pin,stored){const [salt,hash]=(stored||'').split(':');if(!salt||!hash)return false;const expected=Buffer.from(hash,'hex'), actual=scryptSync(pin+PIN_PEPPER,salt,32);return expected.length===actual.length&&timingSafeEqual(expected,actual);}
-function generatePin(){for(let i=0;i<30;i++){const pin=String(randomInt(100000,1000000)),fingerprint=sha(PIN_PEPPER+pin);if(!row('SELECT id FROM players WHERE pin_lookup=?',fingerprint)) return {pin,fingerprint};}throw httpError(503,'Could not generate PIN');}
+function generatePin(){for(let i=0;i<30;i++){const pin=String(randomInt(100000,1000000)),fingerprint=sha(PIN_PEPPER+pin);if(!reservedPins.has(fingerprint)&&!row('SELECT id FROM players WHERE pin_lookup=?',fingerprint)) return {pin,fingerprint};}throw httpError(503,'Could not generate PIN');}
 function parseCookie(req){const raw=req.headers.cookie||'';const m=raw.match(/(?:^|;\s*)dv_session=([a-f0-9]{64})/);return m?.[1]||'';}
 function auth(req){const t=parseCookie(req);if(!t)return null;const s=row('SELECT * FROM sessions WHERE token_hash=? AND expires_at>?',sha(t),at());if(!s)return null;if(s.admin)return {admin:true};const player=row('SELECT id,name,email,village_id,role,verified,consent_email FROM players WHERE id=?',s.player_id);return player?{admin:false,player}:null;}
 function cookie(token,req){const secure=(process.env.PUBLIC_BASE_URL||'').startsWith('https://')||(process.env.TRUST_PROXY==='1'&&req.headers['x-forwarded-proto']==='https')||req.socket.encrypted;return `dv_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Number(process.env.SESSION_DAYS||2)*86400}${secure?'; Secure':''}`;}
@@ -165,24 +168,71 @@ function advanceWorld(){let g=getGame();if(g.phase!=='playing')return;
  if(g.round<=4&&now-g.last_dynamic_event_at>=120000)spontaneousEvent(g,now);
  });
 }
+let mailTransport;
 async function sendEmail(to,subject,body){if(process.env.SMTP_EMAIL&&process.env.SMTP_APP_PASSWORD){
- try{const {default:nodemailer}=await import('nodemailer');const transport=nodemailer.createTransport({host:'smtp.gmail.com',port:465,secure:true,auth:{user:process.env.SMTP_EMAIL,pass:process.env.SMTP_APP_PASSWORD}});await transport.sendMail({from:`Digital Village <${process.env.SMTP_EMAIL}>`,to,subject,text:body});return true;}catch(e){console.error('Mail failed:',e.message);return false;}
+ try{
+  const {default:nodemailer}=await import('nodemailer');
+  mailTransport??=nodemailer.createTransport({host:'smtp.gmail.com',port:465,secure:true,connectionTimeout:10000,greetingTimeout:10000,socketTimeout:15000,auth:{user:process.env.SMTP_EMAIL,pass:process.env.SMTP_APP_PASSWORD}});
+  const result=await mailTransport.sendMail({from:`Digital Village <${process.env.SMTP_EMAIL}>`,to,subject,text:body});
+  return result.accepted?.some(address=>String(address).toLowerCase()===to.toLowerCase())===true;
+ }catch(e){console.error('Mail failed:',e.message);return false;}
  }
  if(DEV_MAIL){run('INSERT INTO outbox(email,subject,body,at) VALUES(?,?,?,?)',to,subject,body,at());return true;}
  return false;
 }
 function newPin(id){const {pin,fingerprint}=generatePin();run('UPDATE players SET pin_hash=?,pin_lookup=?,attempts=0,locked_until=0,pin_sent_at=? WHERE id=?',hashPin(pin),fingerprint,at(),id);return pin;}
+function retryError(message,seconds){return Object.assign(httpError(429,message),{retryAfter:seconds});}
+async function resendPin(value){
+ const email=clean(value).toLowerCase();
+ if(email.length>150||!EMAIL_PATTERN.test(email))throw httpError(400,'Enter your registered email address.');
+ if(!emailConfigured())throw httpError(503,'Email delivery is unavailable. Ask the host for a recovery PIN.');
+ const p=row('SELECT * FROM players WHERE email=?',email);
+ const message=process.env.SMTP_EMAIL&&process.env.SMTP_APP_PASSWORD?'If this email is registered, check your inbox and spam folder for a new PIN. If nothing arrives, check the address or ask the host.':'Rehearsal mode: if this email is registered, ask the host for the new PIN from the test outbox. No real email is sent.';
+ if(!p)return {ok:true,message,retryAfter:90};
+ if(pinDeliveries.has(p.id))throw retryError('A PIN request is still being processed. Please wait.',2);
+ const remaining=Math.ceil((p.pin_sent_at+PIN_COOLDOWN_MS-at())/1000);
+ if(remaining>0)throw retryError(`Please wait ${remaining} seconds before requesting another PIN. Check your inbox and spam folder.`,remaining);
+ const {pin,fingerprint}=generatePin(),hash=hashPin(pin);
+ pinDeliveries.add(p.id);reservedPins.add(fingerprint);
+ try{
+  const sent=await sendEmail(p.email,'Your Digital Village login PIN',`Your new Digital Village login PIN is: ${pin}\n\nKeep it private. Your previous PIN stops working when this request succeeds.`);
+  if(!sent)throw httpError(503,'The email service could not send a new PIN. Your previous PIN still works. Try again or ask the host.');
+  // Keep the existing PIN valid until the mail server accepts the replacement.
+  const changed=run('UPDATE players SET pin_hash=?,pin_lookup=?,attempts=0,locked_until=0,pin_sent_at=? WHERE id=?',hash,fingerprint,at(),p.id);
+  if(!changed.changes)throw httpError(409,'This account is no longer available. Ask the host.');
+  return {ok:true,message,retryAfter:90};
+ }finally{pinDeliveries.delete(p.id);reservedPins.delete(fingerprint);}
+}
+function invitationUrl(){
+ try{const url=new URL(process.env.PUBLIC_BASE_URL);if(!['http:','https:'].includes(url.protocol)||url.username||url.password)return '';return url.origin+'/';}catch{return '';}
+}
+let securityDelivery=null;
+async function sendSecurityNotifications(){
+ const target=invitationUrl();
+ if(!target){logEvent(5,null,'mail','Security exercise emails not sent','The public game address is missing. Use the on-site security lab.');return;}
+ const people=all('SELECT name,email FROM players WHERE verified=1 AND consent_email=1');let sent=0;
+ for(let i=0;i<people.length;i+=3){
+  const results=await Promise.all(people.slice(i,i+3).map(x=>sendEmail(x.email,'Important: Digital Village account notification',`Hello ${x.name},\n\nA new security message is waiting for you. Review it here: ${target}?security=1\n\nThis is part of the consented Digital Village educational security simulation. No passwords will be requested.`)));
+  sent+=results.filter(Boolean).length;
+ }
+ logEvent(5,null,'mail','Security exercise email status',`${sent}/${people.length} messages accepted by the email service. The on-site security lab remains available to everyone.`);
+}
 async function register(payload){let name=clean(payload.name),email=clean(payload.email).toLowerCase(),village=clean(payload.village),role=clean(payload.role);
- if(name.length<2||name.length>70||!/^\S+@\S+\.\S+$/.test(email)||email.length>150)throw httpError(400,'Enter a valid name and email');
+ if(name.length<2||name.length>70||!EMAIL_PATTERN.test(email)||email.length>150)throw httpError(400,'Enter a valid name and email');
  if(!VILLAGES.some(v=>v.id===village)||!ROLES.some(r=>r.id===role))throw httpError(400,'Choose a village and role');
- if(!DEV_MAIL&&!(process.env.SMTP_EMAIL&&process.env.SMTP_APP_PASSWORD))throw httpError(503,'Email delivery is not configured. Ask the host for help.');
+ if(!emailConfigured())throw httpError(503,'Email delivery is not configured. Ask the host for help.');
  const id=randomBytes(12).toString('hex');const {pin,fingerprint}=generatePin();
  try{tx(()=>{run('DELETE FROM players WHERE verified=0 AND created_at<?',at()-25*60000);
  run('INSERT INTO players(id,name,email,village_id,role,pin_hash,pin_lookup,consent_email,created_at,pin_sent_at) VALUES(?,?,?,?,?,?,?,?,?,?)',id,name,email,village,role,hashPin(pin),fingerprint,payload.consentEmail===true?1:0,at(),at());});}
  catch(e){if(/UNIQUE/i.test(e.message))throw httpError(409,'Email already registered or that role is occupied');throw e;}
- const ok=await sendEmail(email,'Your Digital Village login PIN',`Welcome, ${name}!\n\nYour Digital Village login PIN is: ${pin}\n\nUse your email and PIN to sign in. Keep this PIN private.\n\nThis message is for the educational Digital Village simulation.`);
- if(!ok){run('DELETE FROM players WHERE id=? AND verified=0',id);throw httpError(503,'Could not deliver PIN. Ask the host for an emergency login code.');}
- return {ok:true,message:'Check your email for your personal six-digit PIN.'};
+ pinDeliveries.add(id);
+ try{
+  const ok=await sendEmail(email,'Your Digital Village login PIN',`Welcome, ${name}!\n\nYour Digital Village login PIN is: ${pin}\n\nUse your email and PIN to sign in. Keep this PIN private.\n\nThis message is for the educational Digital Village simulation.`);
+  if(!ok){run('DELETE FROM players WHERE id=? AND verified=0',id);throw httpError(503,'Could not send your PIN. Your place has been released; try again or ask the host.');}
+  run('UPDATE players SET pin_sent_at=? WHERE id=?',at(),id);
+  const message=process.env.SMTP_EMAIL&&process.env.SMTP_APP_PASSWORD?'Your PIN email has been sent. Check your inbox and spam folder.':'Rehearsal mode: your PIN is in the host test outbox. Ask the host for your code; no real email is sent.';
+  return {ok:true,email,message,retryAfter:90};
+ }finally{pinDeliveries.delete(id);}
 }
 function login(email,pin,res,req){email=clean(email).toLowerCase();pin=clean(pin);
  const p=row('SELECT * FROM players WHERE email=?',email);if(!p||!/^\d{6}$/.test(pin))throw httpError(401,'Email or PIN incorrect');
@@ -191,7 +241,7 @@ function login(email,pin,res,req){email=clean(email).toLowerCase();pin=clean(pin
  run('UPDATE players SET verified=1,attempts=0,locked_until=0,last_seen=? WHERE id=?',at(),p.id);startSession(res,req,p.id,false);return {ok:true};
 }
 function currentState(a){advanceWorld();const g=getGame(),villages=all('SELECT * FROM villages');
- const time=roundElapsed(g);const base={privacyContact:process.env.PRIVACY_CONTACT||'',game:{round:g.round,phase:g.phase,elapsedMs:time,durationMs:(ROUNDS[g.round-1]?.duration||0)*1000,newsRevealed:!!g.news_revealed,mediaRevealed:!!g.media_revealed,crisisFired:!!g.crisis_fired},rounds:ROUNDS,villages:villages.map(v=>({...v,budget:Math.round(v.budget),youth:Math.round(v.youth),trust:Math.round(v.trust)})),investments:INVESTMENTS,roles:ROLES,assets:MEDIA_ASSETS.map(x=>({id:x.id,label:x.label,symbol:x.symbol,kind:x.kind,color:x.color,...(g.media_revealed||a?.admin?{allowed:x.allowed}:{})})),events:all('SELECT * FROM events ORDER BY id DESC LIMIT 24'),slots:all('SELECT village_id,role,verified FROM players').map(p=>({village:p.village_id,role:p.role,verified:!!p.verified}))};
+ const time=roundElapsed(g);const base={privacyContact:process.env.PRIVACY_CONTACT||'',emailConfigured:emailConfigured(),game:{round:g.round,phase:g.phase,elapsedMs:time,durationMs:(ROUNDS[g.round-1]?.duration||0)*1000,newsRevealed:!!g.news_revealed,mediaRevealed:!!g.media_revealed,crisisFired:!!g.crisis_fired,ticketsFired:!!g.tickets_fired},rounds:ROUNDS,villages:villages.map(v=>({...v,budget:Math.round(v.budget),youth:Math.round(v.youth),trust:Math.round(v.trust)})),investments:INVESTMENTS,roles:ROLES,assets:MEDIA_ASSETS.map(x=>({id:x.id,label:x.label,symbol:x.symbol,kind:x.kind,color:x.color,...(g.media_revealed||a?.admin?{allowed:x.allowed}:{})})),events:all('SELECT * FROM events ORDER BY id DESC LIMIT 24'),slots:all('SELECT village_id,role,verified FROM players').map(p=>({village:p.village_id,role:p.role,verified:!!p.verified}))};
  if(!a)return {...base,restricted:true};
  const person=a.player; if(person)run('UPDATE players SET last_seen=? WHERE id=?',at(),person.id);
  const showNews=g.round>=2 || a.admin;
@@ -202,8 +252,9 @@ function currentState(a){advanceWorld();const g=getGame(),villages=all('SELECT *
  if(g.round>=4||a.admin)base.tasks=all('SELECT * FROM tasks');
  base.histories=Object.fromEntries(villages.map(v=>[v.id,all('SELECT at,budget,youth,trust,internet,jobs,services,education FROM snapshots WHERE village_id=? ORDER BY id DESC LIMIT 150',v.id).reverse()]));
  base.people=all('SELECT id,name,village_id,role,verified,last_seen FROM players');
+ base.builtInvestments=all('SELECT village_id,investment_id FROM investments');
  if(person)base.me=person;
- if(a.admin){base.admin=true;base.outbox=DEV_MAIL?all('SELECT id,email,subject,body,at FROM outbox ORDER BY id DESC LIMIT 50'):[];base.stats={registered:base.people.length,verified:base.people.filter(p=>p.verified).length,active:base.people.filter(p=>p.last_seen>at()-35000).length};}
+ if(a.admin){base.admin=true;base.invitationUrl=invitationUrl();base.emailMode=process.env.SMTP_EMAIL&&process.env.SMTP_APP_PASSWORD?'smtp':DEV_MAIL?'rehearsal':'unavailable';base.outbox=DEV_MAIL?all('SELECT id,email,subject,body,at FROM outbox ORDER BY id DESC LIMIT 50'):[];base.stats={registered:base.people.length,verified:base.people.filter(p=>p.verified).length,active:base.people.filter(p=>p.last_seen>at()-35000).length};}
  return base;
 }
 function canInvest(p){return ['mayor','finance','digital'].includes(p.role);}
@@ -227,9 +278,10 @@ function resolveFestival(){const g=getGame();if(g.festival_resolved)return;
  }
  run('UPDATE game SET festival_resolved=1 WHERE id=1');recordBaseline(4);
 }
-async function doAction(a,body){const op=clean(body.op),g=getGame(),p=a?.player;
+async function doAction(a,body){advanceWorld();const op=clean(body.op),g=getGame(),p=a?.player;
  if(op==='start'||op==='next'||op==='pause'||op==='resume'||op==='grant'||op==='shock'||op==='revealNews'||op==='revealMedia'||op==='triggerTicket'||op==='end'){
-  requireAdmin(a);advanceWorld();const g=getGame();
+  requireAdmin(a);const g=getGame();
+  if(g.phase==='ended'){if(op==='end')return {ok:true};throw httpError(409,'The simulation has finished. Its results are frozen.');}
   if(op==='start'||op==='next'){
    if(op==='start'&&g.round!==0)throw httpError(400,'Game already started');
    if(op==='next'&&(g.round<1||g.round>=5))throw httpError(400,'Cannot advance the game');
@@ -240,10 +292,13 @@ async function doAction(a,body){const op=clean(body.op),g=getGame(),p=a?.player;
    run("UPDATE game SET round=?,phase='playing',started_at=?,elapsed_ms=0,last_sim_at=?,crisis_fired=0,tickets_fired=0,last_dynamic_event_at=? WHERE id=1",next,at(),at(),at());
    if(next===4)addTasks('blue');
    logEvent(next,null,'round',`Round ${next} started`,ROUNDS[next-1].name);recordBaseline(next);
-   if(next===5){const consent=all('SELECT name,email FROM players WHERE verified=1 AND consent_email=1');for(const x of consent){await sendEmail(x.email,'Important: Digital Village account notification',`Hello ${x.name},\n\nA new security message is waiting for you. Review it here: ${process.env.PUBLIC_BASE_URL||'http://localhost:'+PORT}/?security=1\n\nThis is part of the consented Digital Village educational security simulation. No passwords will be requested.`);}run('UPDATE game SET security_sent=1 WHERE id=1');}
+   if(next===5){run('UPDATE game SET security_sent=1 WHERE id=1');securityDelivery=sendSecurityNotifications().catch(e=>console.error('Security notification batch failed:',e.message)).finally(()=>{securityDelivery=null;});}
   }
   if(op==='pause'&&g.phase==='playing')run("UPDATE game SET phase='paused',elapsed_ms=? WHERE id=1",roundElapsed(g));
-  if(op==='resume'&&g.phase==='paused')run("UPDATE game SET phase='playing',started_at=?,last_sim_at=? WHERE id=1",at()-g.elapsed_ms,at());
+  if(op==='resume'&&g.phase==='paused'){
+   const now=at(),eventAge=Math.max(0,g.started_at+g.elapsed_ms-g.last_dynamic_event_at);
+   run("UPDATE game SET phase='playing',started_at=?,last_sim_at=?,last_dynamic_event_at=? WHERE id=1",now-g.elapsed_ms,now,now-eventAge);
+  }
   if(op==='shock'&&g.round===1&&!g.crisis_fired)tx(()=>applyCrisis(g));
   if(op==='triggerTicket'&&g.round===4&&!g.tickets_fired)tx(()=>{addTasks('red');run('UPDATE game SET tickets_fired=1 WHERE id=1');logEvent(4,null,'crisis','Urgent festival problems reported');});
   if(op==='revealNews'&&g.round>=2)tx(resolveNews);
@@ -253,7 +308,16 @@ async function doAction(a,body){const op=clean(body.op),g=getGame(),p=a?.player;
    if(!VILLAGES.some(x=>x.id===v)||!Number.isFinite(amount)||amount<1||amount>250000)throw httpError(400,'Invalid grant (maximum €250,000)');
    tx(()=>{run('UPDATE villages SET budget=budget+? WHERE id=?',Math.floor(amount),v);logEvent(g.round,v,'grant','Regional investment awarded',`+€${Math.floor(amount).toLocaleString('en-US')} from the game host.`);recordBaseline(g.round);});
   }
-  if(op==='end'){if(g.round===4&&!g.festival_resolved)tx(resolveFestival);run("UPDATE game SET phase='ended' WHERE id=1");logEvent(g.round,null,'round','Simulation finished');}
+  if(op==='end'){
+   if(!g.round)throw httpError(409,'Start the simulation before finishing it.');
+   tx(()=>{
+    if(g.round>=2&&!g.news_revealed)resolveNews();
+    if(g.round>=3&&!g.media_revealed)resolveMedia();
+    if(g.round>=4&&!g.festival_resolved)resolveFestival();
+    run("UPDATE game SET phase='ended',elapsed_ms=? WHERE id=1",roundElapsed(g));
+    logEvent(g.round,null,'round','Simulation finished');recordBaseline(g.round);
+   });
+  }
   return {ok:true};
  }
  const player=requirePlayer(a);
@@ -275,6 +339,7 @@ async function doAction(a,body){const op=clean(body.op),g=getGame(),p=a?.player;
  }
  if(op==='unchooseNews'){
   if(g.round!==2||g.news_revealed)throw httpError(409,'News selection is closed');
+  if(!['mayor','media','advisor-1','advisor-2','advisor-3'].includes(player.role))throw httpError(403,'Your role cannot select news');
   run('DELETE FROM news_choices WHERE village_id=? AND news_id=?',player.village_id,clean(body.id));return {ok:true};
  }
  if(op==='publish'){
@@ -305,7 +370,7 @@ async function doAction(a,body){const op=clean(body.op),g=getGame(),p=a?.player;
  throw httpError(400,'Unknown action');
 }
 const json=(res,code,data)=>{res.writeHead(code,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(data));};
-async function bodyJson(req){let s='';for await(const chunk of req){s+=chunk;if(s.length>45000)throw httpError(413,'Request too large');}try{return JSON.parse(s||'{}');}catch{throw httpError(400,'Invalid JSON');}}
+async function bodyJson(req){let s='';for await(const chunk of req){s+=chunk;if(s.length>45000)throw httpError(413,'Request too large');}try{const value=JSON.parse(s||'{}');if(!value||typeof value!=='object'||Array.isArray(value))throw Error();return value;}catch{throw httpError(400,'Expected a JSON object');}}
 const mime={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.ico':'image/x-icon'};
 async function handler(req,res){try{
  const url=new URL(req.url,'http://localhost'),path=url.pathname;
@@ -314,6 +379,12 @@ async function handler(req,res){try{
  if(path.startsWith('/api/')){
   const a=auth(req);
   if(req.method==='GET'&&path==='/api/state')return json(res,200,currentState(a));
+  if(req.method==='GET'&&path==='/api/invite.svg'){
+   requireAdmin(a);const target=invitationUrl();if(!target)throw httpError(503,'Set PUBLIC_BASE_URL before sharing the game.');
+   const {default:QRCode}=await import('qrcode');
+   const svg=await QRCode.toString(target,{type:'svg',errorCorrectionLevel:'M',margin:4,width:256});
+   res.writeHead(200,{'Content-Type':'image/svg+xml; charset=utf-8','Cache-Control':'private, no-store'});return res.end(svg);
+  }
   if(req.method!=='POST')throw httpError(405,'Method not allowed');
   const origin=req.headers.origin;if(origin){const o=new URL(origin);const expected=(process.env.PUBLIC_BASE_URL?new URL(process.env.PUBLIC_BASE_URL).host:req.headers.host);if(o.host!==expected)throw httpError(403,'Invalid request origin');}
   const b=await bodyJson(req);
@@ -329,6 +400,7 @@ async function handler(req,res){try{
   if(path==='/api/action')return json(res,200,await doAction(a,b));
   if(path==='/api/admin/delete-data'){
    requireAdmin(a);throttle(req,'wipe-data',3,3600000);
+   if(pinDeliveries.size||securityDelivery)throw httpError(409,'Email is being processed. Wait for it to finish before erasing accounts.');
    if(b.confirm!=='DELETE ALL PLAYER DATA')throw httpError(400,'Confirmation mismatch');
    const got=Buffer.from(clean(b.password)),expected=Buffer.from(ADMIN_PASSWORD);
    if(got.length!==expected.length||!timingSafeEqual(got,expected))throw httpError(403,'Host password is incorrect');
@@ -338,25 +410,26 @@ async function handler(req,res){try{
   }
   if(path==='/api/admin/issue-pin'){
    requireAdmin(a);const p=row('SELECT id,email FROM players WHERE id=?',clean(b.playerId));if(!p)throw httpError(404,'Player not found');
+   if(pinDeliveries.has(p.id))throw retryError('A PIN email is still being processed for this player. Please wait.',2);
    const pin=tx(()=>newPin(p.id));logEvent(getGame().round,null,'admin','Emergency PIN issued',`Recovery requested for account ${p.id}.`);
    return json(res,200,{ok:true,pin,email:p.email});
   }
   if(path==='/api/resend'){
-   throttle(req,'resend',50,900000);const email=clean(b.email).toLowerCase();const p=row('SELECT * FROM players WHERE email=?',email);
-   if(p&&at()-p.pin_sent_at>90000){
-    const pin=tx(()=>newPin(p.id));
-    const sent=await sendEmail(p.email,'Your Digital Village login PIN',`Your new Digital Village login PIN is ${pin}. Keep it private.`);
-    if(!sent)run('UPDATE players SET pin_hash=?,pin_lookup=?,pin_sent_at=?,attempts=?,locked_until=? WHERE id=?',p.pin_hash,p.pin_lookup,p.pin_sent_at,p.attempts,p.locked_until,p.id);
-   }
-   return json(res,200,{ok:true,message:'If your email is registered, a new PIN has been sent.'});
+   throttle(req,'resend',50,900000);return json(res,200,await resendPin(b.email));
   }
   throw httpError(404,'Unknown endpoint');
  }
  if(req.method!=='GET'&&req.method!=='HEAD')throw httpError(405,'Method not allowed');
  const file=path==='/'?'index.html':path.slice(1);
  if(!['index.html','app.js','style.css','favicon.svg'].includes(file))throw httpError(404,'Not found');
- const content=await readFile(join(ROOT,'public',file));res.writeHead(200,{'Content-Type':mime[extname(file)],'Cache-Control':file==='index.html'?'no-store':'public, max-age=120','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"});res.end(req.method==='HEAD'?undefined:content);
- }catch(e){const code=e.status||500;if(code>=500)console.error(e);json(res,code,{error:code>=500?'Server error':e.message});}}
+ const content=await readFile(join(ROOT,'public',file));res.writeHead(200,{'Content-Type':mime[extname(file)],'Cache-Control':file==='index.html'?'no-store':'public, max-age=120','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"});res.end(req.method==='HEAD'?undefined:content);
+ }catch(e){const code=e.status||500;if(code>=500)console.error(e);if(e.retryAfter)res.setHeader('Retry-After',String(e.retryAfter));json(res,code,{error:e.status?e.message:'Server error',...(e.retryAfter?{retryAfter:e.retryAfter}:{})});}}
+// Persisted rounds resume under host control, without simulating hours of downtime.
+const recovered=getGame();
+if(recovered.phase==='playing')tx(()=>{
+ run("UPDATE game SET phase='paused',elapsed_ms=? WHERE id=1",Math.max(0,recovered.last_sim_at-recovered.started_at));
+ logEvent(recovered.round,null,'recovery','Server restarted — simulation paused','The host can resume from the last saved simulation tick.');
+});
 const server=createServer(handler);
 if(process.env.NODE_ENV!=='test')server.listen(PORT,HOST,()=>console.log(`Digital Village listening at http://${HOST}:${PORT}; dev email outbox: ${DEV_MAIL?'on':'off'}`));
 export {handler,server,db,advanceWorld};
