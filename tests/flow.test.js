@@ -10,7 +10,7 @@ test('complete simulation: private accounts, roles, dynamic economy and five rou
  const tmp=await mkdtemp(join(tmpdir(),'digital-village-'));
  const port=31000+Math.floor(Math.random()*20000),base=`http://127.0.0.1:${port}`;
  const adminPass='integration-admin-password-very-long',pepper='integration-pepper-at-least-twenty-characters';
- const env={...process.env,HOST:'127.0.0.1',PORT:String(port),ADMIN_PASSWORD:adminPass,PIN_PEPPER:pepper,DB_PATH:join(tmp,'world.db'),DEV_EMAIL_OUTBOX:'1',SMTP_EMAIL:'',SMTP_APP_PASSWORD:'',RESEND_API_KEY:'',EMAIL_FROM:'',PUBLIC_BASE_URL:base,NODE_ENV:'development'};
+ const env={...process.env,HOST:'127.0.0.1',PORT:String(port),ADMIN_PASSWORD:adminPass,PIN_PEPPER:pepper,DB_PATH:join(tmp,'world.db'),DEV_EMAIL_OUTBOX:'1',SMTP_EMAIL:'',SMTP_APP_PASSWORD:'',RESEND_API_KEY:'',EMAIL_FROM:'',EXERCISE_SMTP_EMAIL:'',EXERCISE_SMTP_APP_PASSWORD:'',PUBLIC_BASE_URL:base,NODE_ENV:'development'};
  const child=spawn(process.execPath,['server.js'],{cwd:process.cwd(),env,stdio:['ignore','pipe','pipe']});
  let errs='';child.stderr.on('data',d=>errs+=d);
  t.after(async()=>{child.kill();await sleep(200);await rm(tmp,{recursive:true,force:true});});

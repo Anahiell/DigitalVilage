@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createMailer,mailConfiguration} from '../mailer.js';
+import {createMailer,createWorkshopMailer,mailConfiguration} from '../mailer.js';
 const smtpEnv={SMTP_EMAIL:'sender@example.invalid',SMTP_APP_PASSWORD:'synthetic-value'};
 
 test('real SMTP retries a transient error and never falls back to a fake outbox',async()=>{
@@ -27,4 +27,26 @@ test('only an explicit rehearsal configuration creates test mail',async()=>{
 test('a local audit failure after provider acceptance does not become a permanent email rejection or trigger another provider',async()=>{
  let fallback=0;const mail=createMailer({env:{...smtpEnv,...{RESEND_API_KEY:'synthetic-key',EMAIL_FROM:'Village <village@example.invalid>'}},request:async()=>new Response('{"id":"accepted-id"}',{status:200}),record:entry=>{if(entry.status==='accepted')throw Error('Synthetic audit database failure');},transportFactory:()=>({async sendMail(){fallback++;return {accepted:['person@example.invalid']};}})});
  await assert.rejects(mail.sendDetailed({to:'person@example.invalid',subject:'PIN',body:'654321'}),/Synthetic audit/);assert.equal(fallback,0);
+});
+
+test('PINs and opted-in exercise mail use their selected accounts, including sender-specific tests',async()=>{
+ const sent=[],env={...smtpEnv,EXERCISE_SMTP_EMAIL:'teaching@example.invalid',EXERCISE_SMTP_APP_PASSWORD:'synthetic-teaching-password'};
+ const mail=createWorkshopMailer({env,transportFactory:config=>({async sendMail(message){sent.push({account:config.auth.user,...message});return {accepted:[message.to]};}})});
+ assert.equal(mail.exerciseSeparate,true);
+ for(const kind of ['pin','exercise','exercise-test','test'])assert.equal(await mail.send({to:'person@example.invalid',subject:'Workshop',body:'Synthetic test',kind}),true);
+ assert.deepEqual(sent.map(m=>m.account),[smtpEnv.SMTP_EMAIL,env.EXERCISE_SMTP_EMAIL,env.EXERCISE_SMTP_EMAIL,smtpEnv.SMTP_EMAIL]);
+ assert.ok(sent.every(m=>m.from.includes(m.account)));
+ const shared=createWorkshopMailer({env:smtpEnv});assert.equal(shared.exerciseRequested,false);assert.equal(shared.exerciseSeparate,false);assert.equal(shared.configFor('exercise').real,true);
+ const same=createWorkshopMailer({env:{...env,EXERCISE_SMTP_EMAIL:smtpEnv.SMTP_EMAIL}});assert.equal(same.exerciseSeparate,false);
+});
+
+test('broken or incomplete separate exercise credentials never fall back into the PIN sender',async()=>{
+ let primary=0,teaching=0;
+ const options={env:{...smtpEnv,RESEND_API_KEY:'synthetic-api-key',EMAIL_FROM:'PIN <pin@example.invalid>',EXERCISE_SMTP_EMAIL:'teaching@example.invalid',EXERCISE_SMTP_APP_PASSWORD:'synthetic-teaching-password'},request:async()=>{primary++;return new Response('{"id":"accepted"}');},transportFactory:()=>({async sendMail(){teaching++;throw Object.assign(Error('Synthetic rejected teaching account'),{code:'EAUTH'});}})};
+ const mail=createWorkshopMailer(options),message={to:'person@example.invalid',subject:'Exercise',body:'Synthetic test',kind:'exercise'};
+ assert.equal(await mail.send(message),false);assert.equal(primary,0);assert.equal(teaching,1);
+ assert.equal(await mail.send({...message,kind:'pin'}),true);assert.equal(primary,1);
+ const incomplete=createWorkshopMailer({...options,env:{...options.env,EXERCISE_SMTP_APP_PASSWORD:''}});
+ assert.equal(incomplete.exerciseRequested,true);assert.equal(incomplete.configFor('exercise').real,false);
+ assert.equal(await incomplete.send(message),false);assert.equal(primary,1);assert.equal(teaching,1);
 });

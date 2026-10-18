@@ -81,3 +81,29 @@ test('a failed terminal audit cannot delete a registration and then report a non
  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM registrations').get().n,1);assert.equal(db.prepare('SELECT COUNT(*) AS n FROM mail_jobs').get().n,1);
  auditBroken=false;await queue.drain();assert.equal(db.prepare('SELECT COUNT(*) AS n FROM registrations').get().n,0);assert.equal(db.prepare('SELECT COUNT(*) AS n FROM mail_jobs').get().n,0);queue.close();
 });
+
+test('an exercise batch reserves a dispatch slot for a newly requested PIN and queued PINs go first',async t=>{
+ const db=new DatabaseSync(':memory:');t.after(()=>db.close());const started=[],release=[];
+ const mailer={config:{real:true,mode:'smtp'},async sendDetailed(mail){started.push(mail.kind);await new Promise(resolve=>release.push(resolve));return {ok:true,attempts:1};}};
+ const queue=createMailQueue({db,secret,mailer});t.after(()=>queue.close());
+ const exercises=Array.from({length:4},()=>queue.enqueue({...message,kind:'exercise'}));
+ const active=exercises.slice(0,3).map(id=>queue.wait(id));
+ await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(started,['exercise','exercise','exercise']);
+ assert.equal((await queue.wait(exercises[3])).status,'queued');
+ const pin=queue.enqueue(message),pinWork=queue.wait(pin);
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(started.at(-1),'pin');assert.equal(queue.active,4);
+ release.splice(0).forEach(done=>done());await Promise.all([...active,pinWork]);
+ queue.enqueue(message);const drained=queue.drain();
+ await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(started.slice(4),['pin','exercise'],'A newer PIN starts before the older saved exercise.');
+ release.splice(0).forEach(done=>done());await drained;
+ assert.equal(db.prepare('SELECT COUNT(*) AS n FROM mail_jobs').get().n,0);
+});
+
+test('queue safety checks the selected exercise sender rather than assuming PIN configuration',async t=>{
+ const db=new DatabaseSync(':memory:');t.after(()=>db.close());let sent=0,available=true;
+ const mailer={config:{real:true,mode:'smtp'},configFor:kind=>({real:kind==='exercise'?available:true,mode:'smtp'}),async sendDetailed(){sent++;return {ok:true,attempts:1};}};
+ const queue=createMailQueue({db,secret,mailer});t.after(()=>queue.close());
+ const id=queue.enqueue({...message,kind:'exercise'});available=false;
+ assert.equal((await queue.wait(id)).status,'queued');assert.equal(sent,0);
+ assert.equal((await queue.wait(queue.enqueue(message))).status,'accepted');assert.equal(sent,1);
+});

@@ -2,10 +2,10 @@ import {readFile} from 'node:fs/promises';
 import {resolve,dirname,join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {parseEnv} from 'node:util';
-import {mailConfiguration} from '../mailer.js';
+import {createWorkshopMailer} from '../mailer.js';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..'),args=process.argv.slice(2);
 let env={...process.env};try{env={...env,...parseEnv(await readFile(join(root,'.env'),'utf8'))};}catch{}
-const local='http://127.0.0.1:'+Number(env.PORT||3000),mail=mailConfiguration(env);
+const local='http://127.0.0.1:'+Number(env.PORT||3000),senders=createWorkshopMailer({env}),mail=senders.config;
 const checks=[];const note=(name,ok,detail)=>{checks.push({name,ok,detail});console.log((ok?'OK: ':'CHECK: ')+name+' — '+detail);};
 async function inspect(base,label){
  try{const response=await fetch(base.replace(/\/$/,'')+'/healthz',{signal:AbortSignal.timeout(10000)});const data=await response.json();note(label,response.ok&&data.ok&&data.app==='digital-village',data.app==='digital-village'?'Digital Village responded.':'This URL is not the updated Digital Village service.');return response.ok&&data.app==='digital-village';}
@@ -13,6 +13,7 @@ async function inspect(base,label){
 }
 const online=await inspect(local,'Local server');
 note('Real email sender configured',mail.real,mail.mode+'; this checks settings, not inbox delivery.');
+note('Exercise email sender',!senders.exerciseRequested||senders.exerciseConfig.real,senders.exerciseRequested?(senders.exerciseConfig.real?(senders.exerciseSeparate?'Separate account configured.':'Uses the same account as PIN delivery.'):'Separate sender settings are incomplete.'):'Uses the PIN sender; a separate teaching account is optional.');
 note('Public rehearsal outbox disabled',env.DEV_EMAIL_OUTBOX==='0','DEV_EMAIL_OUTBOX must be 0 on the public game.');
 note('Organiser contact',!!env.PRIVACY_CONTACT&&!/example\.(org|com|net)/.test(env.PRIVACY_CONTACT),'Use a real contact before the workshop.');
 if(args.includes('--public')){
@@ -27,6 +28,8 @@ if(online){
    const running=await (await fetch(local+'/api/state',{headers:{Cookie:cookie}})).json();
    note('Saved outgoing mail',true,`${running.mailQueue?.pending||0} pending; ${running.mailQueue?.active||0} processing. Pending is not delivery confirmation.`);
    note('Running sender matches configuration',running.emailMode===mail.mode,'Restart the service after changing sender settings.');
+   const exercise=running.mailConfiguration?.exercise;
+   note('Running exercise sender matches configuration',!!exercise&&exercise.requested===senders.exerciseRequested&&exercise.real===senders.exerciseConfig.real&&exercise.separate===senders.exerciseSeparate,'Restart the service after changing exercise sender settings.');
    let expected='';try{expected=new URL(env.PUBLIC_BASE_URL).origin+'/';}catch{}
    note('Running invitation address',!!expected&&running.invitationUrl===expected,'The QR address must match the current public origin.');
    const response=await fetch(local+'/api/invite.svg',{headers:{Cookie:cookie},signal:AbortSignal.timeout(10000)});

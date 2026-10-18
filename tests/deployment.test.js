@@ -21,4 +21,11 @@ test('Pi preparation preserves secrets, creates a consistent WAL backup and gene
  assert.equal(copy.prepare('SELECT COUNT(*) AS n FROM facts').get().n,2);copy.close();
  const unit=spawnSync(process.execPath,['deploy/pi-config.mjs','--unit','--user','robot'],{cwd:temp,encoding:'utf8'});assert.equal(unit.status,0,unit.stderr);
  const text=await readFile(join(temp,'runtime/digital-village.service'),'utf8');assert.match(text,/User=robot/);assert.ok(text.includes(join(temp,'runtime/current')));assert.ok(text.includes(process.execPath));assert.ok(text.includes('Restart=always'));assert.equal(text.includes(password),false);
+ const configure=(...args)=>{const result=spawnSync(process.execPath,['deploy/pi-config.mjs','--configure',...args],{cwd:temp,encoding:'utf8'});assert.equal(result.status,0,result.stderr);};
+ configure('--url','https://ruralem-play.pages.dev');configure('--funnel-url','https://robot-new.ts.net:8443');
+ let updated=parseEnv(await readFile(join(temp,'.env'),'utf8'));assert.equal(updated.PUBLIC_BASE_URL,'https://ruralem-play.pages.dev','Updating Funnel must preserve the chosen free public address.');assert.equal(updated.PIN_PEPPER,secret);
+ configure('--url','https://robot-old.ts.net:8443');configure('--funnel-url','https://robot-new.ts.net:8443');
+ updated=parseEnv(await readFile(join(temp,'.env'),'utf8'));assert.equal(updated.PUBLIC_BASE_URL,'https://robot-new.ts.net:8443','A direct Funnel address follows the actual Pi hostname.');
+ await writeFile(join(temp,'.env'),(await readFile(join(temp,'.env'),'utf8'))+'\nEXERCISE_SMTP_EMAIL=teaching@example.invalid\n');
+ const incomplete=spawnSync(process.execPath,['deploy/pi-config.mjs','--configure'],{cwd:temp,encoding:'utf8'});assert.equal(incomplete.status,1);assert.match(incomplete.stderr,/both EXERCISE_SMTP_EMAIL and EXERCISE_SMTP_APP_PASSWORD/);assert.equal(incomplete.stderr.includes(password),false);
 });

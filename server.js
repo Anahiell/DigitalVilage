@@ -5,7 +5,7 @@ import {join, extname, resolve, dirname} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {randomBytes, randomInt, scryptSync, createHash, timingSafeEqual} from 'node:crypto';
 import {VILLAGES,ROLES,INVESTMENTS,ROUNDS,MEDIA_ASSETS,FESTIVAL_TASKS,SECURITY_QUESTIONS} from './data.js';
-import {createMailer,mailConfiguration} from './mailer.js';
+import {createWorkshopMailer,mailConfiguration} from './mailer.js';
 import {createMailQueue} from './mail-queue.js';
 import {generateNews,buildRoundReport,campaignReview,buildWorkshopStories} from './game-content.js';
 const ROOT=process.cwd(), HOST=process.env.HOST||'127.0.0.1',PORT=Number(process.env.PORT||3000);
@@ -236,7 +236,7 @@ function recordDelivery(entry){
  run('INSERT INTO mail_deliveries(id,email,kind,status,provider,attempts,error_code,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,provider=excluded.provider,attempts=excluded.attempts,error_code=excluded.error_code,updated_at=excluded.updated_at',entry.id,entry.to,entry.kind,entry.status,entry.provider,entry.attempts,entry.code,entry.at,at());
  if(entry.providerId)run('INSERT INTO mail_provider_refs VALUES(?,?) ON CONFLICT(delivery_id) DO UPDATE SET provider_id=excluded.provider_id',entry.id,entry.providerId);
 }
-const mailer=createMailer({record:recordDelivery,writeOutbox:(to,subject,body)=>run('INSERT INTO outbox(email,subject,body,at) VALUES(?,?,?,?)',to,subject,body,at())});
+const mailer=createWorkshopMailer({record:recordDelivery,writeOutbox:(to,subject,body)=>run('INSERT INTO outbox(email,subject,body,at) VALUES(?,?,?,?)',to,subject,body,at())});
 const mailQueue=createMailQueue({db,secret:PIN_PEPPER,mailer,record:recordDelivery,
  eligible:context=>{if(!context.playerId)return true;const p=row('SELECT * FROM players WHERE id=?',context.playerId);if(!p)return false;if(context.action==='exercise')return !!p.verified&&!!p.consent_email&&getGame().round===5&&getGame().phase!=='ended';return p.pin_lookup===context.expectedLookup;},
  onAccepted:context=>{if(context.action==='resend')run('UPDATE players SET pin_hash=?,pin_lookup=?,attempts=0,locked_until=0,pin_sent_at=? WHERE id=? AND pin_lookup=?',context.pinHash,context.pinLookup,at(),context.playerId,context.expectedLookup);else if(context.action==='registration')run('UPDATE players SET pin_sent_at=? WHERE id=? AND pin_lookup=?',at(),context.playerId,context.expectedLookup);},
@@ -336,7 +336,7 @@ function currentState(a,knownHistory=0){advanceWorld();const g=getGame(),village
  if(g.phase==='ended')base.workshopStories=buildWorkshopStories(all('SELECT data FROM round_reports ORDER BY round').map(r=>JSON.parse(r.data)));
  if(person)base.helpCooldowns=Object.fromEntries(all("SELECT details,MAX(at) AS at FROM events WHERE kind='help' AND details LIKE ? AND at>? GROUP BY details",person.id+':%',at()-60000).map(e=>[e.details.slice(person.id.length+1),e.at+60000]));
  if(person)base.me=person;
- if(a.admin){base.admin=true;base.invitationUrl=invitationUrl();base.emailMode=mailSettings.mode;base.mailConfiguration={mode:mailSettings.mode,real:mailSettings.real,configured:mailSettings.configured,issues:mailSettings.issues};base.mailDeliveries=all("SELECT d.email,d.kind,d.status,d.provider,COALESCE(r.provider_id,'') AS provider_id,d.attempts,d.error_code,d.updated_at FROM mail_deliveries d LEFT JOIN mail_provider_refs r ON r.delivery_id=d.id ORDER BY d.updated_at DESC LIMIT 12");base.mailQueue={pending:row('SELECT COUNT(*) AS n FROM mail_jobs').n,active:mailQueue.active};base.outbox=DEV_MAIL?all('SELECT id,email,subject,body,at FROM outbox ORDER BY id DESC LIMIT 50'):[];base.stats={registered:base.people.length,verified:base.people.filter(p=>p.verified).length,active:base.people.filter(p=>p.last_seen>at()-35000).length};}
+ if(a.admin){base.admin=true;base.invitationUrl=invitationUrl();base.emailMode=mailSettings.mode;base.mailConfiguration={mode:mailSettings.mode,real:mailSettings.real,configured:mailSettings.configured,issues:mailSettings.issues,exercise:{...mailer.exerciseConfig,separate:mailer.exerciseSeparate,requested:mailer.exerciseRequested}};base.mailDeliveries=all("SELECT d.email,d.kind,d.status,d.provider,COALESCE(r.provider_id,'') AS provider_id,d.attempts,d.error_code,d.updated_at FROM mail_deliveries d LEFT JOIN mail_provider_refs r ON r.delivery_id=d.id ORDER BY d.updated_at DESC LIMIT 12");base.mailQueue={pending:row('SELECT COUNT(*) AS n FROM mail_jobs').n,active:mailQueue.active};base.outbox=DEV_MAIL?all('SELECT id,email,subject,body,at FROM outbox ORDER BY id DESC LIMIT 50'):[];base.stats={registered:base.people.length,verified:base.people.filter(p=>p.verified).length,active:base.people.filter(p=>p.last_seen>at()-35000).length};}
  return base;
 }
 function canInvest(p){return ['mayor','finance','digital'].includes(p.role);}
@@ -521,8 +521,10 @@ async function handler(req,res){try{
   if(path==='/api/admin/test-email'){
    requireAdmin(a);throttle(req,'mail-test',3,900000);const email=clean(b.email).toLowerCase();
    if(!EMAIL_PATTERN.test(email)||email.length>150)throw httpError(400,'Enter the address where you will check the test message.');
-   if(!mailSettings.real)throw httpError(503,'Configure a real sender before testing delivery. Rehearsal outbox is not real email.');
-   const sent=await sendEmail(email,'Digital Village — delivery check','This is the requested Digital Village delivery test. If you can read this message, confirm receipt in the host checklist. No PIN is included.','test');
+   if(b.sender!==undefined&&!['pin','exercise'].includes(b.sender))throw httpError(400,'Choose the PIN or exercise sender.');
+   const kind=b.sender==='exercise'?'exercise-test':'test',configuration=mailer.configFor(kind);
+   if(!configuration.real)throw httpError(503,'Configure a real sender for this delivery test. Rehearsal outbox is not real email.');
+   const sent=await sendEmail(email,'Digital Village — delivery check','This is the requested Digital Village delivery test. If you can read this message, confirm receipt in the host checklist. No PIN is included.',kind);
    if(sent.status==='queued')return json(res,202,{ok:true,queued:true,message:'Test request saved; delivery is pending and will be retried for up to 15 minutes. This is not a successful delivery yet.'});
    if(sent.status!=='accepted')throw httpError(503,'The provider did not accept the test email. Check the delivery diagnostics below.');
    return json(res,200,{ok:true,message:'The email service accepted the test. Confirm that it actually arrived in your inbox or spam folder.'});

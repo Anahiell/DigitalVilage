@@ -40,7 +40,11 @@ sudo tailscale funnel --bg --https=8443 http://127.0.0.1:3000
 
 Use the configured application port if different. Funnel must already be allowed for the tailnet; policy/HTTPS enablement can require the tailnet owner's account. With `--bg` the configuration persists through restart. Funnel supports specific HTTPS ports and its tailnet `*.ts.net` hostname, rather than an arbitrary custom DNS name. Verify outside the LAN and allow for DNS propagation. Do not use `tailscale funnel reset`, which removes other routes too.
 
-## Optional custom hostname on the same Pi
+## Free friendly hostname
+
+The optional [Cloudflare Pages gateway](FREE_DOMAIN_RU.md) gives the game a free available `*.pages.dev` name while the Pi remains the server. Source and configuration are under `deploy/free-domain/`. This needs the owner’s Cloudflare account; no name was registered or deployed by the code update. The free account’s shared quota is 100,000 dynamic requests/day. Gateway requests preserve browser Origin, cookies and private responses; the configured compatibility date/flag keeps the required 8443 destination port. After creating the actual hostname, set it as `PUBLIC_BASE_URL`, restart and test from a phone. Future `--funnel` updates preserve this custom public origin.
+
+## Optional purchased-domain hostname on the same Pi
 
 This is optional and requires control of a real domain; no domain was purchased or DNS changed by this code update.
 
@@ -63,6 +67,8 @@ SMTP_APP_PASSWORD=your-private-google-app-password
 ```
 
 These are configuration descriptions, not usable credentials. Gmail requires the owner's actual account configuration. SMTP_HOST/SMTP_PORT default to `smtp.gmail.com` / `465` and can be changed for another provider.
+
+For a separate teaching sender, set `EXERCISE_SMTP_EMAIL` and `EXERCISE_SMTP_APP_PASSWORD` for another account, then restart. Without them, exercise messages share the current PIN sender. A configured teaching account never falls back into PIN delivery on failure. The host shows the selected mode; choose **PIN delivery** or **Security exercise** in the test form and check each actual inbox result. The queue prioritises PIN jobs and reserves a dispatch slot from background exercise mail. `doctor` and preparation reject incomplete separate-account settings without sending email.
 
 For optional primary HTTPS delivery, verify a real sending domain in Resend and apply the SPF/DKIM records it supplies; configure DMARC for the domain too. Then set `RESEND_API_KEY` and `EMAIL_FROM` with your actual verified address. Keep Gmail configured for a second real route. No sender domain/key was provisioned by this update. See [Resend's send API](https://resend.com/docs/api-reference/emails/send-email).
 

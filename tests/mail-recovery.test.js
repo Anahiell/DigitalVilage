@@ -71,3 +71,25 @@ test('successful host diagnostics do not exhaust login attempts; incorrect passw
  assert.equal((await app.request('/api/admin/login',{password:'incorrect-password'})).status,429);
  assert.equal((await app.request('/api/admin/login',{password:app.password})).status,200);
 });
+
+test('real-mode registration, both sender tests and round-five opt-in use the correct synthetic SMTP accounts',async t=>{
+ const app=await rehearsal(t);await app.stop();const capture=app.dbPath+'.capture',db=new DatabaseSync(app.dbPath);t.after(()=>db.close());
+ const primary='pins@example.invalid',exercise='teaching@example.invalid';
+ await app.start({DEV_EMAIL_OUTBOX:'0',SMTP_EMAIL:primary,SMTP_APP_PASSWORD:'synthetic-pin-password',EXERCISE_SMTP_EMAIL:exercise,EXERCISE_SMTP_APP_PASSWORD:'synthetic-exercise-password',DV_SYNTHETIC_SMTP_MODE:'success',DV_SYNTHETIC_MAIL_CAPTURE:capture},true);
+ const readMail=async()=>(await readFile(capture,'utf8')).trim().split('\n').map(JSON.parse);
+ assert.equal((await app.request('/api/register',{name:'Consenting Participant',email:'consent@test.example',village:'green-valley',role:'mayor',consentEmail:true})).status,200);
+ const registration=(await readMail())[0];assert.ok(registration.from.includes(primary));
+ assert.equal((await app.request('/api/login',{email:'consent@test.example',pin:registration.text.match(/PIN is: (\d{6})/)[1]})).status,200);
+ const admin=(await app.request('/api/admin/login',{password:app.password})).cookie;
+ const other=await app.request('/api/admin/enrol',{name:'No Email Exercise',email:'no-consent@test.example',village:'riverstone',role:'mayor',present:true,consentEmail:false},admin);
+ assert.equal((await app.request('/api/login',{email:other.data.email,pin:other.data.pin})).status,200);
+ assert.equal((await app.request('/api/admin/test-email',{email:'owner@test.example',sender:'exercise'},admin)).status,200);
+ assert.equal((await app.request('/api/admin/test-email',{email:'owner@test.example',sender:'pin'},admin)).status,200);
+ const state=(await app.request('/api/state',undefined,admin)).data;assert.equal(state.mailConfiguration.exercise.separate,true);assert.equal(state.mailConfiguration.exercise.real,true);assert.equal(JSON.stringify(state).includes('synthetic-exercise-password'),false);
+ assert.equal((await app.request('/api/state')).data.mailConfiguration,undefined);
+ assert.equal((await app.request('/api/action',{op:'start'},admin)).status,200);
+ for(let n=0;n<4;n++)assert.equal((await app.request('/api/action',{op:'next'},admin)).status,200);
+ await until(()=>db.prepare("SELECT 1 FROM mail_deliveries WHERE kind='exercise' AND status='accepted'").get());
+ const sent=await readMail();assert.equal(sent.length,4);assert.deepEqual(sent.map(m=>m.from),[`Digital Village <${primary}>`,`Digital Village <${exercise}>`,`Digital Village <${primary}>`,`Digital Village <${exercise}>`]);
+ assert.equal(sent.at(-1).to,'consent@test.example');assert.ok(sent.every(m=>m.to!=='no-consent@test.example'));assert.match(sent.at(-1).text,/No passwords will be requested/);
+});

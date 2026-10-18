@@ -1,0 +1,9 @@
+{
+  "name": "ruralem-play",
+  "pages_build_output_dir": "./public",
+  "compatibility_date": "2026-10-18",
+  "compatibility_flags": ["allow_custom_ports"],
+  "vars": {
+    "PI_ORIGIN": "https://robobrain.taild17717.ts.net:8443"
+  }
+}

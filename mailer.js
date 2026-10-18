@@ -67,3 +67,14 @@ export function createMailer({env=process.env,record=()=>{},writeOutbox=()=>{},r
  const send=async message=>(await sendDetailed(message)).ok;
  return {config,send,sendDetailed};
 }
+
+// Optional teaching account; it never falls back into the PIN account when configured.
+export function createWorkshopMailer(options={}){
+ const env=options.env||process.env,primary=createMailer(options);
+ const requested=!!(env.EXERCISE_SMTP_EMAIL||env.EXERCISE_SMTP_APP_PASSWORD);
+ const teaching=requested?createMailer({...options,env:{...env,SMTP_EMAIL:env.EXERCISE_SMTP_EMAIL||'',SMTP_APP_PASSWORD:env.EXERCISE_SMTP_APP_PASSWORD||'',SMTP_HOST:env.EXERCISE_SMTP_HOST||'smtp.gmail.com',SMTP_PORT:env.EXERCISE_SMTP_PORT||'465',RESEND_API_KEY:'',EMAIL_FROM:'',DEV_EMAIL_OUTBOX:'0'}}):primary;
+ const exerciseSeparate=requested&&teaching.config.real&&String(env.EXERCISE_SMTP_EMAIL).trim().toLowerCase()!==String(env.SMTP_EMAIL||'').trim().toLowerCase();
+ const choose=kind=>kind?.startsWith('exercise')?teaching:primary;
+ const sendDetailed=message=>choose(message.kind).sendDetailed(message);
+ return {config:primary.config,exerciseConfig:teaching.config,exerciseSeparate,exerciseRequested:requested,configFor:kind=>choose(kind).config,sendDetailed,send:async message=>(await sendDetailed(message)).ok};
+}

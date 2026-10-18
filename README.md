@@ -34,17 +34,18 @@ Do not expose rehearsal outbox mode publicly. For HTTPS operation, use the exact
 
 ## Raspberry Pi operation
 
-[Arrival guide](deploy/ARRIVAL_RU.md) · [Technical deployment details](deploy/PI_SETUP.md) · [Readiness review](deploy/WORKSHOP_REVIEW.md).
+[Arrival guide](deploy/ARRIVAL_RU.md) · [Free HTTPS name](deploy/FREE_DOMAIN_RU.md) · [Technical deployment details](deploy/PI_SETUP.md) · [Readiness review](deploy/WORKSHOP_REVIEW.md).
 
 The launcher stages a complete version, installs locked dependencies, runs integration and 30-player checks, backs up the database/configuration, generates a systemd unit using the installed Node path, switches the release and checks health. `digital-village.service` starts after reboot and restarts after a crash. Saved data stays in the checkout's `storage/` directory through an absolute database path.
 
-The default prepared route uses **Tailscale Funnel on HTTPS port 8443**, preserving the existing Observatory at HTTPS port 443 / local port 8080. The launcher refuses to replace another service on 8443. Phones need ordinary Internet access; they do not need Tailscale installed. A custom hostname can instead use Cloudflare Tunnel to `http://127.0.0.1:3000` and the `--apply` launcher mode.
+The default prepared route uses **Tailscale Funnel on HTTPS port 8443**, preserving the existing Observatory at HTTPS port 443 / local port 8080. The launcher refuses to replace another service on 8443. Phones need ordinary Internet access; they do not need Tailscale installed. For a free friendly address, [the prepared Cloudflare Pages gateway](deploy/FREE_DOMAIN_RU.md) can expose the Pi at an available `*.pages.dev` name. It requires the owner’s free Cloudflare account and has a shared 100,000-request daily quota. The name is not registered by this code update. Future Funnel updates preserve a chosen custom public origin. A purchased-domain hostname can instead use Cloudflare Tunnel to `http://127.0.0.1:3000` and the `--apply` launcher mode.
 
 `npm run doctor` checks local/public service identity, host authentication, sender configuration and the invitation QR. It deliberately sends **no mail**. To send one requested test, use Host → setup → **Send one delivery test**, or `node deploy/doctor.mjs --public --mail recipient@example.com` with an actual recipient you control.
 
 ## Email
 
 - Gmail SMTP: set both `SMTP_EMAIL` and `SMTP_APP_PASSWORD` for a dedicated account. `SMTP_HOST` / `SMTP_PORT` optionally support another SMTP server.
+- Optional separate Gmail/SMTP teaching account: set `EXERCISE_SMTP_EMAIL` and `EXERCISE_SMTP_APP_PASSWORD`. The opted-in exercise and its host test then use that account; its failures never fall back into the PIN account. Without these settings the current sender is shared. The host displays which mode is active and can test each sender separately. PIN jobs run first, and exercise jobs leave one of four dispatch slots available.
 - Optional Resend HTTPS sender: set `RESEND_API_KEY` and `EMAIL_FROM` on your own verified sending domain. If both providers are configured, Resend is primary and SMTP is the real fallback.
 - Outgoing mail is saved in an **encrypted SQLite queue before dispatch**. Temporary failures retry with increasing delays for up to 15 minutes, including after a process restart. The same request ID is reused for Resend idempotency; SMTP keeps a stable Message-ID, which does not guarantee deduplication by the recipient. Permanent failures stop. Completed or expired payloads are removed. Keep the existing `PIN_PEPPER`: it also protects the queue.
 - HTTP **202 / queued** means a saved pending request, never successful delivery. A queued registration keeps its place; expiry or permanent failure releases an unused registration. A failed/pending replacement leaves the old PIN usable until the provider accepts the new one. Host rescue cancels a delayed replacement so it cannot overwrite the hand-delivered PIN.

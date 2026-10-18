@@ -20,7 +20,7 @@ if [[ "$MODE" == --funnel ]]; then
   APP_HTTPS_PORT=8443
   # Read existing routes first; never replace an Observatory or another service.
   tailscale funnel status --json | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{const j=JSON.parse(s||"{}"),port=process.argv[1],target="http://127.0.0.1:"+process.argv[2];if(j.TCP?.[port]?.TCPForward){console.error("Public port is already used by TCP forwarding.");process.exit(1);}for(const [host,web] of Object.entries(j.Web||{})){if(host.endsWith(":"+port)){for(const handler of Object.values(web.Handlers||{})){if(handler.Proxy!==target){console.error("Public port "+port+" is already used by another service. No route was changed.");process.exit(1);}}}}});' "$APP_HTTPS_PORT" "$APP_PORT"
-  node deploy/pi-config.mjs --configure --url "https://$APP_DNS:$APP_HTTPS_PORT"
+  node deploy/pi-config.mjs --configure --funnel-url "https://$APP_DNS:$APP_HTTPS_PORT"
 else
   node deploy/pi-config.mjs --configure
 fi
