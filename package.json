@@ -15,5 +15,8 @@
   },
   "optionalDependencies": {
     "nodemailer": "^10.1.2"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
   }
 }
