@@ -13,8 +13,9 @@
     "test": "node --test tests/*.test.js",
     "load-test": "node tests/load.mjs",
     "doctor": "node deploy/doctor.mjs --public",
-    "test:e2e": "node --test tests/browser.e2e.mjs",
-    "workshop": "node deploy/start-workshop.mjs"
+    "test:e2e": "node --test tests/*.e2e.mjs",
+    "workshop": "node deploy/start-workshop.mjs",
+    "test:monitor": "node --test tests/participant-monitor.test.js"
   },
   "dependencies": {
     "nodemailer": "^10.1.2",
