@@ -254,8 +254,8 @@ async function submitForm(form){
  if(form.id==='register-form')$('#login-form [name="pin"]')?.focus();
 }
 async function withBusy(button,work){
- if(ui.busy)return;ui.busy=true;if(button)button.disabled=true;
- try{await work();}finally{ui.busy=false;if(button?.isConnected)button.disabled=false;updateResend();}
+ if(ui.busy)return;ui.busy=true;if(button){button.disabled=true;button.setAttribute('aria-busy','true');}
+ try{await work();}finally{ui.busy=false;render(true);updateResend();}
 }
 async function action(el){
  if(ui.busy)return;const key=el.dataset.action;

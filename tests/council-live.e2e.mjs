@@ -18,6 +18,7 @@ test('mobile council journey: briefing, stable polls, mayor approval, live metri
  await expect(member.locator('.round-mission')).toContainText('ROUND 1 OF 5');await expect(member.getByRole('button',{name:'Propose investment'}).first()).toBeEnabled();
  const before=(await a.state()).villages[0].budget;
  await member.locator('[data-action=invest][data-id=school]').click();await expect(member.locator('[data-action=invest][data-id=school]')).toHaveText('Awaiting mayor');
+ await expect(member.locator('[data-action=invest][data-id=school]')).toBeDisabled();
  assert.equal((await a.state()).builtInvestments.length,0);
  await mayor.locator('[data-view=council]').last().click();await expect(mayor.getByText(/Proposed by Mobile Events/)).toBeVisible();await mayor.getByRole('button',{name:'Approve and apply',exact:true}).click();
  await expect(member.locator('[data-action=invest][data-id=school]')).toHaveText('Completed');assert.ok((await a.state()).villages[0].budget<before);
@@ -33,6 +34,8 @@ test('mobile council journey: briefing, stable polls, mayor approval, live metri
  await expect(member.locator('#post-form')).toBeVisible();await member.locator('#post-form [name=title]').fill('Our mobile campaign');await member.locator('#post-form [name=body]').fill('Discover our community and its wonderful mountain trails.');
  await member.locator('.asset-usage summary').click();const draft=await member.locator('#post-form [name=body]').elementHandle();await draft.focus();await member.waitForTimeout(7600);
  assert.equal(await draft.evaluate(e=>e.isConnected&&e===document.activeElement&&e.value.includes('mountain trails')),true);await expect(member.locator('.asset-usage')).toHaveAttribute('open','');
+ await a.action('pause');await expect(member.locator('body')).toHaveAttribute('data-phase','paused');assert.equal(await draft.evaluate(e=>e.isConnected&&e===document.activeElement),true);
+ await a.action('resume');await expect(member.locator('body')).toHaveAttribute('data-phase','playing');assert.equal(await draft.evaluate(e=>e.isConnected&&e.value.includes('mountain trails')),true);
  await a.action('closeRound');await a.action('next');await expect(member.locator('.kanban')).toBeVisible();
  assert.equal(await member.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
  const columns=await member.locator('.board-col').evaluateAll(es=>es.map(e=>({left:e.getBoundingClientRect().left,top:e.getBoundingClientRect().top})));assert.ok(columns.every(c=>Math.abs(c.left-columns[0].left)<2));assert.ok(columns[1].top>columns[0].top);
