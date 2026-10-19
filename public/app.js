@@ -5,7 +5,7 @@ import {normaliseLayout,BRAND_PATHS} from './poster-model.js';
 import {editorHtml,briefHtml,mountEditor,paintPoster} from './poster-editor.js';
 const $=q=>document.querySelector(q);
 const app=$('#app'),toast=$('#toast');
-const ui={tab:'register',view:'home',metric:'youth',village:'green-valley',role:'mayor',selectedAssets:null,draftTitle:null,draftBody:null,newsFilter:'all',busy:false,adminGrantVillage:'green-valley',adminGrantAmount:'10000',showAll:false,auth:{name:'',email:'',pin:'',consentEmail:false},resendUntil:new Map(),authMessage:'',authError:false,reportsCache:new Map(),reportRound:null,reportVillage:null,draftCredits:null,draftVersion:null,postFeedback:'',openDetails:new Map(),testEmail:'',testSender:'pin',mailFeedback:'',enrol:{name:'',email:'',village:'green-valley',role:'mayor',present:false,consentEmail:false}};
+const ui={delegateChoices:{},tab:'register',view:'home',metric:'youth',village:'green-valley',role:'mayor',selectedAssets:null,draftTitle:null,draftBody:null,newsFilter:'all',busy:false,adminGrantVillage:'green-valley',adminGrantAmount:'10000',showAll:false,auth:{name:'',email:'',pin:'',consentEmail:false},resendUntil:new Map(),authMessage:'',authError:false,reportsCache:new Map(),reportRound:null,reportVillage:null,draftCredits:null,draftVersion:null,postFeedback:'',openDetails:new Map(),testEmail:'',testSender:'pin',mailFeedback:'',enrol:{name:'',email:'',village:'green-valley',role:'mayor',present:false,consentEmail:false}};
 let studioKey=null;
 let state=null,timer=null,refreshVersion=0,connectionLost=false,receivedAt=Date.now(),previousVillages=new Map(),pendingRefresh=0;
 if(new URL(location.href).searchParams.has('projector'))ui.view='projector';
@@ -186,7 +186,7 @@ function roundView(){
  const content=g.round===1?roundBanner()+investmentView(currentVillage()):g.round===2?newsroom():g.round===3?studio():g.round===4?board():security();
  return `<section class="tile panel round-mission" data-dom-key="round-mission"><span class="eyebrow">STEP 2 · ROUND ${g.round} OF 5</span><h1>${esc(round().name)}</h1><p><b>${esc(role?.label||'Council member')}:</b> ${missions[g.round]}</p><p class="round-clock" data-round-clock role="timer">${displayTime(g.remainingMs)} remaining · ${g.phase.toUpperCase()}</p><div class="round-links"><button class="secondary" data-view="home">View live dashboard</button><button class="secondary" data-view="council">Council decisions (${(state.proposals||[]).filter(p=>p.status==='pending').length})</button></div></section>${content}${g.councilApprovals&&g.round<=3?councilView():''}`;
 }
-function main(){if(ui.view==='projector'&&state.admin)return projector();let panel=!state.admin&&game().phase==='waiting'?briefingView():ui.view==='round'?roundView():ui.view==='council'?councilView():ui.view==='home'?homeView():ui.view==='news'?newsroom():ui.view==='content'?studio():ui.view==='tasks'?board():ui.view==='security'?security():ui.view==='admin'&&state.admin?adminView():ui.view==='participants'&&state.admin?renderParticipants(state):ui.view==='results'?reportsView():homeView();return `${navbar()}<div class="workspace">${sidebar()}<main class="content" id="content" data-screen="${ui.view}" tabindex="-1">${teamPanel(state)}${panel}<footer class="content-foot">DIGITAL VILLAGE · EVERY DECISION HAS CONSEQUENCES · RURALEM</footer></main></div>${bottomNav()}`;}
+function main(){if(ui.view==='projector'&&state.admin)return projector();let panel=!state.admin&&game().phase==='waiting'?briefingView():ui.view==='round'?roundView():ui.view==='council'?councilView():ui.view==='home'?homeView():ui.view==='news'?newsroom():ui.view==='content'?studio():ui.view==='tasks'?board():ui.view==='security'?security():ui.view==='admin'&&state.admin?adminView():ui.view==='participants'&&state.admin?renderParticipants(state):ui.view==='results'?reportsView():homeView();return `${navbar()}<div class="workspace">${sidebar()}<main class="content" id="content" data-screen="${ui.view}" tabindex="-1">${teamPanel(state,ui.delegateChoices)}${panel}<footer class="content-foot">DIGITAL VILLAGE · EVERY DECISION HAS CONSEQUENCES · RURALEM</footer></main></div>${bottomNav()}`;}
 function render(force=false){
  if(!state||ui.busy&&!force)return;
  if(!active())rememberAuth();
@@ -235,7 +235,7 @@ async function refresh(force=false){
  }finally{pendingRefresh--;}
 }
 function cooldown(email,seconds){ui.resendUntil.set(email.trim().toLowerCase(),Date.now()+seconds*1000);updateResend();}
-function clearWorkspace(){studioKey=null;ui.taskFilter='all';ui.openDetails.clear();ui.reportsCache.clear();ui.reportRound=null;ui.reportVillage=null;ui.selectedAssets=null;ui.draftTitle=null;ui.draftBody=null;ui.draftCredits=null;ui.draftVersion=null;ui.posterLayout=null;ui.sharedBase=null;ui.postFeedback='';ui.auth.pin='';ui.authMessage='';}
+function clearWorkspace(){studioKey=null;ui.delegateChoices={};ui.taskFilter='all';ui.openDetails.clear();ui.reportsCache.clear();ui.reportRound=null;ui.reportVillage=null;ui.selectedAssets=null;ui.draftTitle=null;ui.draftBody=null;ui.draftCredits=null;ui.draftVersion=null;ui.posterLayout=null;ui.sharedBase=null;ui.postFeedback='';ui.auth.pin='';ui.authMessage='';}
 async function submitForm(form){
  const b=Object.fromEntries(new FormData(form));rememberAuth();
  if(form.id==='register-form'){
@@ -281,7 +281,7 @@ async function action(el){
    if(key==='checkNews')body.note=el.closest('details').querySelector('textarea').value;
    if(key==='checkCampaign')body={op:key,version:Number(el.dataset.version),digest:el.dataset.digest,note:document.getElementById('campaign-check-note').value};
    if(key==='shareCampaign'){const f=document.getElementById('post-form');if(!f.reportValidity())return;body={op:key,baseDigest:ui.sharedBase??state.workshop?.campaignDrafts.find(d=>d.village_id===state.me.village_id)?.digest??'',title:f.elements.title.value,body:f.elements.body.value,credits:f.elements.credits.value,layout:ui.posterLayout??state.posts.find(p=>p.village_id===state.me?.village_id)?.layout??{},assets:ui.selectedAssets??state.posts.find(p=>p.village_id===state.me.village_id)?.assetIds??[],version:ui.draftVersion??state.posts.find(p=>p.village_id===state.me.village_id)?.updated_at??0};}
-   const out=await api('action',body);if(key==='shareCampaign'){ui.sharedBase=out.digest;savePosterDraft();}notice(out.message||'Council updated');await refresh(true);
+   const out=await api('action',body);if(key==='delegateMayor'||key==='restoreMayor')delete ui.delegateChoices[el.dataset.village];if(key==='shareCampaign'){ui.sharedBase=out.digest;savePosterDraft();}notice(out.message||'Council updated');await refresh(true);
   });return;
  }
  if(key==='set-ready'){await withBusy(el,async()=>{await api('action',{op:'setReady',ready:!state.ready});notice('Readiness saved. Only the host starts round one.');await refresh(true);});return;}
@@ -353,6 +353,7 @@ document.addEventListener('submit',async e=>{
 });
 document.addEventListener('change',e=>{
  rememberAuth();rememberHostSupport(e.target);
+ if(e.target.matches('[data-delegate-village]'))ui.delegateChoices[e.target.dataset.delegateVillage]=e.target.value;
  if(e.target.closest('#mail-test-form')&&e.target.name==='sender')render(true);
  if(e.target.id==='enrol-village'){ui.enrol.role='';render(true);}
  if(e.target.id==='register-village'){ui.village=e.target.value;ui.role='';render(true);}
