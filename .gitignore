@@ -7,3 +7,8 @@ node_modules/
 backups/
 runtime/
 .wrangler/
+
+*.log
+test-results/
+playwright-report/
+smtp.env

@@ -2,7 +2,7 @@
   "name": "digital-village",
   "version": "0.2.2",
   "private": true,
-  "description": "Digital Village — live multiplayer Erasmus+ educational simulation",
+  "description": "Digital Village \u0432\u0402\u201d live multiplayer Erasmus+ educational simulation",
   "type": "module",
   "engines": {
     "node": ">=22.13.0"
@@ -12,10 +12,15 @@
     "dev": "node --env-file-if-exists=.env --watch server.js",
     "test": "node --test tests/*.test.js",
     "load-test": "node tests/load.mjs",
-    "doctor": "node deploy/doctor.mjs --public"
+    "doctor": "node deploy/doctor.mjs --public",
+    "test:e2e": "node --test tests/browser.e2e.mjs",
+    "workshop": "node deploy/start-workshop.mjs"
   },
   "dependencies": {
-    "qrcode": "^1.5.4",
-    "nodemailer": "^10.1.2"
+    "nodemailer": "^10.1.2",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1"
   }
 }

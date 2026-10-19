@@ -22,7 +22,7 @@ export function createMailQueue({db,secret,mailer,record=()=>{},eligible=()=>tru
  }
  function enqueue(message,context={}){
   const id=randomUUID(),createdAt=now(),payload={message:{...message,id},context,real:configFor(message.kind||'pin').real};
-  db.prepare('INSERT INTO mail_jobs(id,player_id,pin_lookup,kind,payload,created_at,expires_at,next_at) VALUES(?,?,?,?,?,?,?,?)').run(id,context.playerId||null,context.pinLookup||null,message.kind||'pin',encrypt(id,payload),createdAt,createdAt+maxAge,createdAt);
+  db.prepare('INSERT INTO mail_jobs(id,player_id,pin_lookup,kind,payload,created_at,expires_at,next_at) VALUES(?,?,?,?,?,?,?,?)').run(id,context.playerId||null,context.pinLookup||null,message.kind||'pin',encrypt(id,payload),createdAt,createdAt+(message.kind==='report'?7*86400000:maxAge),createdAt);
   audit(one(id),payload,'queued');return id;
  }
  function process(id){
@@ -38,7 +38,7 @@ export function createMailQueue({db,secret,mailer,record=()=>{},eligible=()=>tru
    if(!eligible(payload.context))return finish(job,payload,'cancelled','request_superseded');
    const result=payload.real&&!configFor(job.kind).real?{ok:false,retryable:true,code:'sender_unavailable',attempts:job.attempts}:await mailer.sendDetailed({...payload.message,createdAt:job.created_at,attemptOffset:job.attempts});
    if(result.ok)return finish(job,payload,'accepted','');
-   if(!result.retryable||job.cycles>=5){job.attempts=result.attempts;return finish(job,payload,'failed',result.code);}
+   if(!result.retryable||(job.kind!=='report'&&job.cycles>=5)){job.attempts=result.attempts;return finish(job,payload,'failed',result.code);}
    const delay=[10000,30000,60000,120000,240000][Math.min(job.cycles,4)];
    db.prepare('UPDATE mail_jobs SET next_at=?,cycles=cycles+1,attempts=? WHERE id=?').run(now()+delay,result.attempts,id);
    audit(job,payload,'queued',result.code,result.attempts);return {status:'queued',code:result.code};
@@ -58,5 +58,5 @@ export function createMailQueue({db,secret,mailer,record=()=>{},eligible=()=>tru
   if(jobs.some(job=>running.has(job.id)))throw Error('An email request is still being processed.');
   for(const job of jobs){let payload;try{payload=decrypt(job);}catch{}db.prepare('DELETE FROM mail_jobs WHERE id=?').run(job.id);audit(job,payload,'cancelled','host_recovery');}
  }
- return {enqueue,wait,drain,cancelPlayer,pendingPlayer:playerId=>!!db.prepare("SELECT 1 FROM mail_jobs WHERE player_id=? AND kind='pin'").get(playerId),close:()=>{closed=true;},get active(){return running.size;}};
+ return {enqueue,wait,drain,cancelPlayer,pendingPlayer:playerId=>!!db.prepare("SELECT 1 FROM mail_jobs WHERE player_id=? AND kind='pin'").get(playerId),close:()=>{closed=true;},get activeSession(){return [...running.keys()].some(id=>one(id)?.kind!=='report');},get active(){return running.size;}};
 }

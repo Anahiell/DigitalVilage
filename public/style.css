@@ -59,3 +59,5 @@ input:user-invalid,textarea:user-invalid,select:user-invalid{border-color:#b8514
 [data-phase="review"] .live-dot,[data-phase="ended"] .live-dot,[data-phase="paused"] .live-dot,[data-phase="review"] .pulse-dot,[data-phase="ended"] .pulse-dot{animation:none;background:#aabdb0}
 .host-setup{margin:18px 0}.host-setup>summary{cursor:pointer;font-size:16px;font-weight:800}.host-setup[open]>summary{margin-bottom:20px}.host-setup .invitation-card{box-shadow:none}.host-setup .host-support-grid{margin-bottom:0}
 .poster-credits{display:block;font-size:10px;color:#e4f2e8;line-height:1.6;margin-top:15px;overflow-wrap:anywhere}.projector-credit{font-size:10px!important;color:#bed5c4!important}
+
+.final-report-dialog{width:min(1100px,94vw);max-height:90vh;overflow:auto;border:0;border-radius:16px;padding:24px;background:#f5f8f7;color:#102c36}.final-report-dialog::backdrop{background:#071b25b3}

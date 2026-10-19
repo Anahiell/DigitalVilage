@@ -72,7 +72,7 @@ test('successful host diagnostics do not exhaust login attempts; incorrect passw
  assert.equal((await app.request('/api/admin/login',{password:app.password})).status,200);
 });
 
-test('real-mode registration, both sender tests and round-five opt-in use the correct synthetic SMTP accounts',async t=>{
+test('real-mode registration, both sender tests and round-five exercise for everyone use the correct synthetic SMTP accounts',async t=>{
  const app=await rehearsal(t);await app.stop();const capture=app.dbPath+'.capture',db=new DatabaseSync(app.dbPath);t.after(()=>db.close());
  const primary='pins@example.invalid',exercise='teaching@example.invalid';
  await app.start({DEV_EMAIL_OUTBOX:'0',SMTP_EMAIL:primary,SMTP_APP_PASSWORD:'synthetic-pin-password',EXERCISE_SMTP_EMAIL:exercise,EXERCISE_SMTP_APP_PASSWORD:'synthetic-exercise-password',DV_SYNTHETIC_SMTP_MODE:'success',DV_SYNTHETIC_MAIL_CAPTURE:capture},true);
@@ -89,7 +89,11 @@ test('real-mode registration, both sender tests and round-five opt-in use the co
  assert.equal((await app.request('/api/state')).data.mailConfiguration,undefined);
  assert.equal((await app.request('/api/action',{op:'start'},admin)).status,200);
  for(let n=0;n<4;n++)assert.equal((await app.request('/api/action',{op:'next'},admin)).status,200);
- await until(()=>db.prepare("SELECT 1 FROM mail_deliveries WHERE kind='exercise' AND status='accepted'").get());
- const sent=await readMail();assert.equal(sent.length,4);assert.deepEqual(sent.map(m=>m.from),[`Digital Village <${primary}>`,`Digital Village <${exercise}>`,`Digital Village <${primary}>`,`Digital Village <${exercise}>`]);
- assert.equal(sent.at(-1).to,'consent@test.example');assert.ok(sent.every(m=>m.to!=='no-consent@test.example'));assert.match(sent.at(-1).text,/No passwords will be requested/);
+ await until(()=>db.prepare("SELECT COUNT(*) AS n FROM mail_deliveries WHERE kind='exercise' AND status='accepted'").get().n===2);
+ const sent=await readMail();assert.equal(sent.length,5);
+ const exercises=sent.slice(3);assert.ok(exercises.every(m=>m.from===`Digital Village <${exercise}>`));
+ assert.deepEqual(exercises.map(m=>m.to).sort(),['consent@test.example','no-consent@test.example']);
+ assert.ok(exercises.every(m=>m.text.includes('/phishing')&&m.text.includes('No passwords will be requested')));
+ const reveal=await app.request('/phishing');assert.equal(reveal.status,200);assert.match(reveal.data,/This was phishing/);
+
 });

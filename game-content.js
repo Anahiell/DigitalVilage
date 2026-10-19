@@ -53,7 +53,7 @@ export function buildRoundReport({round,startedAt,closedAt,elapsedMs,reason,star
   const localEvents=events.filter(e=>e.village_id===v.id||!e.village_id);
   const localInvestments=investments.filter(i=>i.village_id===v.id).map(i=>INVESTMENTS.find(x=>x.id===i.investment_id)).filter(Boolean);
   const chosen=choices.filter(c=>c.village_id===v.id).map(c=>news.find(n=>n.id===c.news_id)).filter(Boolean);
-  const post=posts.find(p=>p.village_id===v.id),localTasks=tasks.filter(t=>t.village_id===v.id);
+  const post=posts.find(p=>p.village_id===v.id),localTasks=tasks.filter(t=>t.village_id===v.id&&!t.cancelled);
   const participantIds=new Set(team.filter(p=>p.verified).map(p=>p.id));
   const localAnswers=answers.filter(a=>participantIds.has(a.player_id));
   const correct=localAnswers.filter(a=>SECURITY_QUESTIONS.find(q=>q.id===a.question_id)?.correct===a.answer_id).length;

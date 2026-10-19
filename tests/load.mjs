@@ -1,3 +1,4 @@
+import {fileURLToPath} from 'node:url';
 // Rehearsal load test: 30 users on one IP, no real mail or production data.
 import {spawn} from 'node:child_process';
 import {mkdtemp,rm} from 'node:fs/promises';
@@ -8,7 +9,7 @@ import assert from 'node:assert/strict';
 import {VILLAGES,ROLES} from '../data.js';
 const temp=await mkdtemp(join(tmpdir(),'dv-load-')),port=randomInt(32000,55000);
 const base='http://127.0.0.1:'+port,pass='admin-test-password-0123456789';
-const child=spawn(process.execPath,['server.js'],{cwd:new URL('../',import.meta.url).pathname,env:{...process.env,HOST:'127.0.0.1',PORT:String(port),DB_PATH:join(temp,'test.db'),NODE_ENV:'development',ADMIN_PASSWORD:pass,PIN_PEPPER:'load-pepper-12345678901234567890',DEV_EMAIL_OUTBOX:'1',SMTP_EMAIL:'',SMTP_APP_PASSWORD:'',RESEND_API_KEY:'',EMAIL_FROM:'',EXERCISE_SMTP_EMAIL:'',EXERCISE_SMTP_APP_PASSWORD:''},stdio:['ignore','pipe','pipe']});
+const child=spawn(process.execPath,['server.js'],{cwd:fileURLToPath(new URL('../',import.meta.url)),env:{...process.env,HOST:'127.0.0.1',PORT:String(port),DB_PATH:join(temp,'test.db'),NODE_ENV:'development',ADMIN_PASSWORD:pass,PIN_PEPPER:'load-pepper-12345678901234567890',DEV_EMAIL_OUTBOX:'1',SMTP_EMAIL:'',SMTP_APP_PASSWORD:'',RESEND_API_KEY:'',EMAIL_FROM:'',EXERCISE_SMTP_EMAIL:'',EXERCISE_SMTP_APP_PASSWORD:'',PUBLIC_BASE_URL:base},stdio:['ignore','pipe','pipe']});
 let err='',reqs=0;const lat=[];child.stderr.on('data',b=>err+=b);
 const api=async(route,body,cookie,status=200)=>{const tick=performance.now();const r=await fetch(base+'/api/'+route,{method:body===undefined?'GET':'POST',headers:{...(body===undefined?{}:{'Content-Type':'application/json'}),...(cookie?{Cookie:cookie}:{})},body:body===undefined?undefined:JSON.stringify(body)});const d=await r.json();lat.push(performance.now()-tick);reqs++;assert.equal(r.status,status,route+': '+JSON.stringify(d));return {...d,cookie:r.headers.get('set-cookie')?.split(';')[0]};};
 try{
@@ -25,6 +26,17 @@ try{
  const mayor=logins.find(l=>l.user.role==='mayor');await api('action',{op:'invest',id:'fiber'},mayor.cookie);await api('action',{op:'grant',amount:3000,village:'green-valley'},admin);
  for(let r=2;r<=5;r++){await api('action',{op:'next'},admin);const data=await Promise.all(logins.map(u=>api('state',undefined,u.cookie)));assert.ok(data.every(s=>s.game.round===r))}
  const state=await api('state',undefined,admin);assert.equal(state.stats.verified,30);
+ await api('action',{op:'pause'},admin);const paused=await Promise.all(logins.map(u=>api('state',undefined,u.cookie)));assert.ok(paused.every(s=>s.game.phase==='paused'));
+ await api('action',{op:'resume'},admin);await api('action',{op:'end'},admin);
+ const final=await Promise.all(logins.map(u=>api('state',undefined,u.cookie)));assert.ok(final.every(s=>s.finalReport?.player.name===s.me.name));
+ await Promise.all(logins.map(u=>api('action',{op:'acknowledgeReport'},u.cookie)));
+ const sessionId=final[0].game.sessionId;
+ // Wait for the exercise batch to finish before reset; all traffic remains local.
+ for(let n=0;n<60;n++){if((await api('state',undefined,admin)).mailQueue.pending===0)break;await new Promise(r=>setTimeout(r,100));}
+ const reset={confirm:'RESET FINISHED GAME',password:pass,sessionId};
+ await api('admin/reset-game',reset,admin);await api('admin/reset-game',reset,admin,409);
+ const archives=await Promise.all(logins.map(u=>api('final-report',undefined,u.cookie)));assert.ok(archives.every((r,i)=>r.player.name===logins[i].user.name));
+ assert.equal((await api('state',undefined,admin)).stats.registered,0);
  lat.sort((a,b)=>a-b);const p=n=>Number(lat[Math.ceil(lat.length*n/100)-1].toFixed(1));
  console.log(JSON.stringify({players:30,requests:reqs,errors:0,p50Ms:p(50),p95Ms:p(95),p99Ms:p(99),maxMs:p(100),sharedIp:true,passed:true},null,2));
 }catch(e){console.error(e.stack,err);process.exitCode=1}

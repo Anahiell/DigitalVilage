@@ -7,6 +7,7 @@ import {randomBytes, randomInt, scryptSync, createHash, timingSafeEqual} from 'n
 import {VILLAGES,ROLES,INVESTMENTS,ROUNDS,MEDIA_ASSETS,FESTIVAL_TASKS,SECURITY_QUESTIONS} from './data.js';
 import {createWorkshopMailer,mailConfiguration} from './mailer.js';
 import {createMailQueue} from './mail-queue.js';
+import {createSessionLifecycle} from './session-lifecycle.js';
 import {generateNews,buildRoundReport,campaignReview,buildWorkshopStories} from './game-content.js';
 const ROOT=process.cwd(), HOST=process.env.HOST||'127.0.0.1',PORT=Number(process.env.PORT||3000);
 const ADMIN_PASSWORD=process.env.ADMIN_PASSWORD||'', PIN_PEPPER=process.env.PIN_PEPPER||'';
@@ -98,6 +99,11 @@ CREATE TABLE IF NOT EXISTS outbox (
 );
 `);
 if(!db.prepare('PRAGMA table_info(posts)').all().some(c=>c.name==='credits'))db.exec("ALTER TABLE posts ADD COLUMN credits TEXT NOT NULL DEFAULT ''");
+db.exec('CREATE TABLE IF NOT EXISTS exercise_recipients(player_id TEXT PRIMARY KEY)');
+db.exec("CREATE TABLE IF NOT EXISTS crisis_controls(kind TEXT PRIMARY KEY,status TEXT NOT NULL,trigger_ms INTEGER NOT NULL,paused_at INTEGER NOT NULL DEFAULT 0)");
+if(!db.prepare('PRAGMA table_info(tasks)').all().some(c=>c.name==='cancelled'))db.exec('ALTER TABLE tasks ADD COLUMN cancelled INTEGER NOT NULL DEFAULT 0');
+const crisisStatus=kind=>db.prepare('SELECT status FROM crisis_controls WHERE kind=?').get(kind)?.status||'running';
+const crisisTrigger=(kind,fallback)=>db.prepare('SELECT trigger_ms FROM crisis_controls WHERE kind=?').get(kind)?.trigger_ms??fallback;
 const at=()=>Date.now(), sha=x=>createHash('sha256').update(x).digest('hex');
 function tx(fn){db.exec('BEGIN IMMEDIATE');try{const a=fn();db.exec('COMMIT');return a;}catch(e){db.exec('ROLLBACK');throw e;}}
 function row(q,...a){return db.prepare(q).get(...a);} function all(q,...a){return db.prepare(q).all(...a);} function run(q,...a){return db.prepare(q).run(...a);}
@@ -154,8 +160,8 @@ function applyCrisis(g,timestamp=at()){
 }
 function timedEvents(g,timestamp){
  const elapsed=Math.max(0,timestamp-g.started_at);
- if(g.round===1&&!g.crisis_fired&&elapsed>=600000){applyCrisis(g,timestamp);g.crisis_fired=1;}
- if(g.round===4&&!g.tickets_fired&&elapsed>=240000){
+ if(g.round===1&&!g.crisis_fired&&crisisStatus('funding')==='running'&&elapsed>=crisisTrigger('funding',600000)){applyCrisis(g,timestamp);g.crisis_fired=1;}
+ if(g.round===4&&!g.tickets_fired&&crisisStatus('festival')==='running'&&elapsed>=crisisTrigger('festival',240000)){
   addTasks('red');run('UPDATE game SET tickets_fired=1 WHERE id=1');g.tickets_fired=1;
   logEvent(4,null,'crisis','Emergency alerts: pipe failure and speaker cancellation','Critical tickets have arrived. Assign the right people to solve them.',timestamp);
  }
@@ -180,7 +186,7 @@ function advanceWorld(){
     run('UPDATE villages SET budget=?,youth=?,trust=? WHERE id=?',budget,youth,trust,v.id);snapshot({...v,budget,youth,trust},g.round,timestamp);
    }
    if(g.round===4){
-    const unfinished=all('SELECT * FROM tasks WHERE assigned_to IS NOT NULL AND done=0');
+    const unfinished=all('SELECT * FROM tasks WHERE assigned_to IS NOT NULL AND done=0 AND cancelled=0').filter(t=>t.type!=='red'||crisisStatus('festival')==='running');
     const workload=new Map();for(const task of unfinished)workload.set(task.assigned_to,(workload.get(task.assigned_to)||0)+1);
     for(const task of unfinished){
      const player=row('SELECT role FROM players WHERE id=?',task.assigned_to);
@@ -238,7 +244,7 @@ function recordDelivery(entry){
 }
 const mailer=createWorkshopMailer({record:recordDelivery,writeOutbox:(to,subject,body)=>run('INSERT INTO outbox(email,subject,body,at) VALUES(?,?,?,?)',to,subject,body,at())});
 const mailQueue=createMailQueue({db,secret:PIN_PEPPER,mailer,record:recordDelivery,
- eligible:context=>{if(!context.playerId)return true;const p=row('SELECT * FROM players WHERE id=?',context.playerId);if(!p)return false;if(context.action==='exercise')return !!p.verified&&!!p.consent_email&&getGame().round===5&&getGame().phase!=='ended';return p.pin_lookup===context.expectedLookup;},
+ eligible:context=>{if(!context.playerId)return true;const p=row('SELECT * FROM players WHERE id=?',context.playerId);if(!p)return false;if(context.action==='exercise')return true;return p.pin_lookup===context.expectedLookup;},
  onAccepted:context=>{if(context.action==='resend')run('UPDATE players SET pin_hash=?,pin_lookup=?,attempts=0,locked_until=0,pin_sent_at=? WHERE id=? AND pin_lookup=?',context.pinHash,context.pinLookup,at(),context.playerId,context.expectedLookup);else if(context.action==='registration')run('UPDATE players SET pin_sent_at=? WHERE id=? AND pin_lookup=?',at(),context.playerId,context.expectedLookup);},
  onFailed:context=>{if(context.action==='registration')run('DELETE FROM players WHERE id=? AND verified=0 AND pin_lookup=?',context.playerId,context.expectedLookup);},
  onActive:job=>{if(job.kind==='pin'&&job.player_id)pinDeliveries.add(job.player_id);},
@@ -248,6 +254,7 @@ const mailQueue=createMailQueue({db,secret:PIN_PEPPER,mailer,record:recordDelive
 db.exec('CREATE TRIGGER IF NOT EXISTS clear_player_mail_jobs AFTER DELETE ON players BEGIN DELETE FROM mail_jobs WHERE player_id=OLD.id; END;');
 run("UPDATE mail_deliveries SET status=CASE WHEN id IN (SELECT id FROM mail_jobs) THEN 'queued' ELSE 'interrupted' END,error_code='server_restart',updated_at=? WHERE status='sending'",at());
 async function sendEmail(to,subject,body,kind='test',context={}){return mailQueue.wait(mailQueue.enqueue({to,subject,body,kind},context));}
+const lifecycle=createSessionLifecycle({db,enqueue:(message,context)=>mailQueue.enqueue(message,context)});
 
 
 function newPin(id){mailQueue.cancelPlayer(id);const {pin,fingerprint}=generatePin();run('UPDATE players SET pin_hash=?,pin_lookup=?,attempts=0,locked_until=0,pin_sent_at=? WHERE id=?',hashPin(pin),fingerprint,at(),id);return pin;}
@@ -272,11 +279,15 @@ function invitationUrl(){
  try{const url=new URL(process.env.PUBLIC_BASE_URL);if(!['http:','https:'].includes(url.protocol)||url.username||url.password)return '';return url.origin+'/';}catch{return '';}
 }
 let securityDelivery=null;
+function enqueueExercise(person){
+ const target=invitationUrl();if(!target||row('SELECT 1 FROM exercise_recipients WHERE player_id=?',person.id))return null;
+ const id=mailQueue.enqueue({to:person.email,subject:'Important: Digital Village account notification',body:`Hello ${person.name},\n\nA new security message is waiting for you. Review it here: ${target}phishing\n\nThis is part of the Digital Village educational security simulation. No passwords will be requested.`,kind:'exercise'},{action:'exercise',playerId:person.id});
+ run('INSERT INTO exercise_recipients VALUES(?)',person.id);return id;
+}
 async function sendSecurityNotifications(){
- const target=invitationUrl();
- if(!target){tx(()=>{run('UPDATE game SET security_sent=1 WHERE id=1');logEvent(5,null,'mail','Security exercise emails not sent','The public game address is missing. Use the on-site security lab.');});return;}
- const people=all('SELECT id,name,email FROM players WHERE verified=1 AND consent_email=1');
- const jobs=tx(()=>{if(getGame().security_sent)return [];const pending=people.map(x=>mailQueue.enqueue({to:x.email,subject:'Important: Digital Village account notification',body:`Hello ${x.name},\n\nA new security message is waiting for you. Review it here: ${target}?security=1\n\nThis is part of the consented Digital Village educational security simulation. No passwords will be requested.`,kind:'exercise'},{action:'exercise',playerId:x.id}));run('UPDATE game SET security_sent=1 WHERE id=1');return pending;});
+ if(!invitationUrl()){logEvent(5,null,'mail','Security exercise emails not sent','Set PUBLIC_BASE_URL and restart to retry.');return;}
+ const people=all('SELECT id,name,email FROM players');
+ const jobs=tx(()=>{const pending=people.map(enqueueExercise).filter(Boolean);run('UPDATE game SET security_sent=1 WHERE id=1');return pending;});
  for(let i=0;i<people.length;i+=3){
   await Promise.all(jobs.slice(i,i+3).map(id=>mailQueue.wait(id)));
  }
@@ -285,11 +296,12 @@ async function sendSecurityNotifications(){
  logEvent(5,null,'mail','Security exercise email status',`${sent}/${people.length} messages accepted by the email service; ${queued} pending; ${rehearsal} rehearsal only. The on-site security lab remains available to everyone.`);
 }
 function reservePlayer(payload,afterReserve=()=>{}){let name=clean(payload.name),email=clean(payload.email).toLowerCase(),village=clean(payload.village),role=clean(payload.role);
+ if(getGame().phase==='ended')throw httpError(409,'This session has finished. Ask the host to reset before enrolling.');
  if(name.length<2||name.length>70||!EMAIL_PATTERN.test(email)||email.length>150)throw httpError(400,'Enter a valid name and email');
  if(!VILLAGES.some(v=>v.id===village)||!ROLES.some(r=>r.id===role))throw httpError(400,'Choose a village and role');
  const id=randomBytes(12).toString('hex');const {pin,fingerprint}=generatePin();
  try{tx(()=>{run('DELETE FROM players WHERE verified=0 AND created_at<? AND id NOT IN (SELECT player_id FROM mail_jobs WHERE player_id IS NOT NULL)',at()-25*60000);
- run('INSERT INTO players(id,name,email,village_id,role,pin_hash,pin_lookup,consent_email,created_at,pin_sent_at) VALUES(?,?,?,?,?,?,?,?,?,?)',id,name,email,village,role,hashPin(pin),fingerprint,payload.consentEmail===true?1:0,at(),at());afterReserve({id,pin,fingerprint,name,email});});}
+ run('INSERT INTO players(id,name,email,village_id,role,pin_hash,pin_lookup,consent_email,created_at,pin_sent_at) VALUES(?,?,?,?,?,?,?,?,?,?)',id,name,email,village,role,hashPin(pin),fingerprint,payload.consentEmail===true?1:0,at(),at());afterReserve({id,pin,fingerprint,name,email});if(getGame().round===5&&getGame().security_sent)enqueueExercise({id,name,email});});}
  catch(e){if(/UNIQUE/i.test(e.message))throw httpError(409,'Email already registered or that role is occupied');throw e;}
  return {id,pin,name,email};
 }
@@ -309,9 +321,9 @@ function login(email,pin,res,req){email=clean(email).toLowerCase();pin=clean(pin
  if(!verifyPin(pin,p.pin_hash)){const attempts=p.attempts+1;run('UPDATE players SET attempts=?,locked_until=? WHERE id=?',attempts,attempts>=5?at()+900000:0,p.id);throw httpError(401,'Email or PIN incorrect');}
  run('UPDATE players SET verified=1,attempts=0,locked_until=0,last_seen=? WHERE id=?',at(),p.id);startSession(res,req,p.id,false);return {ok:true};
 }
-function currentState(a,knownHistory=0){advanceWorld();const g=getGame(),villages=all('SELECT * FROM villages');
+function currentState(a,knownHistory=0,tokenHash=''){advanceWorld();const g=getGame(),villages=all('SELECT * FROM villages');
  const time=roundElapsed(g);const base={privacyContact:process.env.PRIVACY_CONTACT||'',emailConfigured:emailConfigured(),game:{round:g.round,phase:g.phase,elapsedMs:time,durationMs:(ROUNDS[g.round-1]?.duration||0)*1000,newsRevealed:!!g.news_revealed,mediaRevealed:!!g.media_revealed,crisisFired:!!g.crisis_fired,ticketsFired:!!g.tickets_fired},rounds:ROUNDS,villages:villages.map(v=>({...v,budget:Math.round(v.budget),youth:Math.round(v.youth),trust:Math.round(v.trust)})),investments:INVESTMENTS,roles:ROLES,assets:MEDIA_ASSETS.map(x=>({id:x.id,label:x.label,symbol:x.symbol,kind:x.kind,color:x.color,usage:x.usage,credit:x.credit||'',...(g.media_revealed||a?.admin?{allowed:x.allowed}:{})})),events:all('SELECT * FROM events ORDER BY id DESC LIMIT 24'),slots:all('SELECT village_id,role,verified FROM players').map(p=>({village:p.village_id,role:p.role,verified:!!p.verified}))};
- if(!a)return {...base,restricted:true};
+ if(!a)return {...base,restricted:true,archivedReport:lifecycle.read(null,tokenHash)};
  const person=a.player; if(person)run('UPDATE players SET last_seen=? WHERE id=?',at(),person.id);
  const showNews=g.round>=2 || a.admin;
  if(showNews){const mayorByVillage=Object.fromEntries(all("SELECT village_id,name FROM players WHERE role='mayor' AND verified=1").map(x=>[x.village_id,x.name]));
@@ -319,12 +331,14 @@ function currentState(a,knownHistory=0){advanceWorld();const g=getGame(),village
  base.choices=all('SELECT * FROM news_choices');base.newsSources=all('SELECT data FROM news_sources').map(x=>JSON.parse(x.data));}
  if(g.media_revealed||a.admin)base.campaignReviews=Object.fromEntries(all('SELECT * FROM posts').map(p=>[p.village_id,campaignReview(p)]));
  base.posts=all('SELECT * FROM posts').map(p=>({...p,assetIds:JSON.parse(p.asset_ids)}));
- if(g.round>=4||a.admin)base.tasks=all('SELECT * FROM tasks');
+ if(g.round>=4||a.admin)base.tasks=all('SELECT * FROM tasks WHERE cancelled=0');
  base.historyVersion=row('SELECT COALESCE(MAX(id),0) AS n FROM snapshots').n;
  if(!knownHistory||knownHistory!==base.historyVersion)base.histories=Object.fromEntries(villages.map(v=>[v.id,all('SELECT at,budget,youth,trust,internet,jobs,services,education FROM snapshots WHERE village_id=? ORDER BY id DESC LIMIT 150',v.id).reverse()]));
  base.people=all('SELECT id,name,village_id,role,verified,last_seen FROM players');
  base.builtInvestments=all('SELECT village_id,investment_id FROM investments');
  base.serverTime=at();
+ base.game.sessionId=lifecycle.sessionId();base.crisisControls=all('SELECT * FROM crisis_controls');
+ if(person&&g.phase==='ended')base.finalReport=lifecycle.read(person.id);
  base.roundReportIndex=all('SELECT round,closed_at FROM round_reports ORDER BY round').map(r=>({round:r.round,closedAt:r.closed_at,name:ROUNDS[r.round-1].name}));
  if(['review','ended'].includes(g.phase)){const latest=row('SELECT data FROM round_reports ORDER BY round DESC LIMIT 1');base.latestRoundReport=latest?JSON.parse(latest.data):null;}
  if(g.round>=5||a.admin){
@@ -353,14 +367,33 @@ function resolveMedia(){const g=getGame();if(g.media_revealed)return;
  run('UPDATE game SET media_revealed=1 WHERE id=1');recordBaseline(g.round);
 }
 function resolveFestival(){const g=getGame();if(g.festival_resolved)return;
- for(const v of VILLAGES){const tasks=all('SELECT * FROM tasks WHERE village_id=?',v.id);const blue=tasks.filter(t=>t.type==='blue'),red=tasks.filter(t=>t.type==='red');const doneBlue=blue.filter(t=>t.done).length,doneRed=red.filter(t=>t.done).length;
- const success=doneBlue===4&&red.length===2&&doneRed===2;const deltaYouth=success?12:doneBlue>=2?3:-8;const deltaBudget=success?12000:doneBlue>=2?1000:-8500;const deltaTrust=success?8:doneBlue>=2?0:-7;
+ for(const v of VILLAGES){const tasks=all('SELECT * FROM tasks WHERE village_id=? AND cancelled=0',v.id);const blue=tasks.filter(t=>t.type==='blue'),red=tasks.filter(t=>t.type==='red');const doneBlue=blue.filter(t=>t.done).length,doneRed=red.filter(t=>t.done).length;
+ const success=doneBlue===4&&(crisisStatus('festival')==='cancelled'||red.length===2&&doneRed===2);const deltaYouth=success?12:doneBlue>=2?3:-8;const deltaBudget=success?12000:doneBlue>=2?1000:-8500;const deltaTrust=success?8:doneBlue>=2?0:-7;
  run('UPDATE villages SET youth=MAX(25,youth+?),budget=MAX(0,budget+?),trust=MAX(0,MIN(100,trust+?)) WHERE id=?',deltaYouth,deltaBudget,deltaTrust,v.id);
  logEvent(4,v.id,'festival',success?'Successful youth festival':doneBlue>=2?'Festival completed with difficulties':'Festival unsuccessful',`Completed ${doneBlue}/${blue.length} standard and ${doneRed}/${red.length} urgent tasks. Youth ${deltaYouth>=0?'+':''}${deltaYouth}.`);
  }
  run('UPDATE game SET festival_resolved=1 WHERE id=1');recordBaseline(4);
 }
 async function doAction(a,body){advanceWorld();const op=clean(body.op),g=getGame(),p=a?.player;
+ if(body.sessionId&&body.sessionId!==lifecycle.sessionId())throw httpError(409,'The session has changed. Refresh before trying again.');
+ if(op==='acknowledgeReport'){const player=requirePlayer(a);if(g.phase!=='ended')throw httpError(409,'No final report yet.');lifecycle.acknowledge(player.id);return {ok:true};}
+ if(['pauseCrisis','resumeCrisis','cancelCrisis'].includes(op)){
+  requireAdmin(a);if(!['playing','paused'].includes(g.phase)||![1,4].includes(g.round))throw httpError(409,'No open crisis in this round.');
+  const kind=g.round===1?'funding':'festival',elapsed=roundElapsed(g),control=row('SELECT * FROM crisis_controls WHERE kind=?',kind),status=control?.status||'running';
+  if(status==='cancelled')throw httpError(409,'This crisis has been cancelled.');
+  if(g.round===1&&g.crisis_fired&&op!=='cancelCrisis')throw httpError(409,'The funding cut is instantaneous; it can only be cancelled.');
+  tx(()=>{
+   run('INSERT OR IGNORE INTO crisis_controls VALUES(?,?,?,0)',kind,'running',g.round===1?600000:240000);
+   if(op==='pauseCrisis'&&status==='running')run("UPDATE crisis_controls SET status='paused',paused_at=? WHERE kind=?",elapsed,kind);
+   if(op==='resumeCrisis'&&status==='paused')run("UPDATE crisis_controls SET status='running',trigger_ms=trigger_ms+? WHERE kind=?",Math.max(0,elapsed-control.paused_at),kind);
+   if(op==='cancelCrisis'){
+    run("UPDATE crisis_controls SET status='cancelled' WHERE kind=?",kind);
+    if(g.round===1&&g.crisis_fired){for(const loss of all('SELECT * FROM crisis_losses WHERE round=1'))run('UPDATE villages SET budget=budget+? WHERE id=?',loss.amount,loss.village_id);run('DELETE FROM crisis_losses WHERE round=1');recordBaseline(1);}
+    if(g.round===4)run("UPDATE tasks SET cancelled=1,assigned_to=NULL WHERE type='red'");
+   }
+   logEvent(g.round,null,'crisis-control',op,kind);
+  });return {ok:true};
+ }
  if(op==='start'||op==='next'||op==='pause'||op==='resume'||op==='grant'||op==='shock'||op==='revealNews'||op==='revealMedia'||op==='triggerTicket'||op==='end'||op==='closeRound'){
   requireAdmin(a);const g=getGame();
   if(g.phase==='ended'){if(op==='end')return {ok:true};throw httpError(409,'The simulation has finished. Its results are frozen.');}
@@ -388,8 +421,8 @@ async function doAction(a,body){advanceWorld();const op=clean(body.op),g=getGame
    const now=at(),eventAge=Math.max(0,g.started_at+g.elapsed_ms-g.last_dynamic_event_at);
    run("UPDATE game SET phase='playing',started_at=?,last_sim_at=?,last_dynamic_event_at=? WHERE id=1",now-g.elapsed_ms,now,now-eventAge);
   }
-  if(op==='shock'&&g.round===1&&!g.crisis_fired)tx(()=>applyCrisis(g));
-  if(op==='triggerTicket'&&g.round===4&&!g.tickets_fired)tx(()=>{addTasks('red');run('UPDATE game SET tickets_fired=1 WHERE id=1');logEvent(4,null,'crisis','Urgent festival problems reported');});
+  if(op==='shock'&&g.round===1&&!g.crisis_fired&&crisisStatus('funding')==='running')tx(()=>applyCrisis(g));
+  if(op==='triggerTicket'&&g.round===4&&!g.tickets_fired&&crisisStatus('festival')==='running')tx(()=>{addTasks('red');run('UPDATE game SET tickets_fired=1 WHERE id=1');logEvent(4,null,'crisis','Urgent festival problems reported');});
   if(op==='revealNews'&&g.round>=2)tx(resolveNews);
   if(op==='revealMedia'&&g.round>=3)tx(resolveMedia);
   if(op==='grant'){
@@ -400,7 +433,7 @@ async function doAction(a,body){advanceWorld();const op=clean(body.op),g=getGame
   }
   if(op==='end'){
    if(!g.round)throw httpError(409,'Start the simulation before finishing it.');
-   tx(()=>{closeRound('ended');run("UPDATE game SET phase='ended' WHERE id=1");logEvent(g.round,null,'round','Simulation finished');});
+   tx(()=>{closeRound('ended');run("UPDATE game SET phase='ended' WHERE id=1");lifecycle.finalize();logEvent(g.round,null,'round','Simulation finished');});
   }
   return {ok:true};
  }
@@ -449,7 +482,7 @@ async function doAction(a,body){advanceWorld();const op=clean(body.op),g=getGame
  }
  if(op==='claimTask'){
   if(g.round!==4)throw httpError(409,'Tasks are not active');
-  const t=row('SELECT * FROM tasks WHERE id=?',clean(body.id));if(!t||t.village_id!==player.village_id||t.done)throw httpError(400,'Task unavailable');
+  const t=row('SELECT * FROM tasks WHERE id=?',clean(body.id));if(!t||t.village_id!==player.village_id||t.done||t.cancelled||(t.type==='red'&&crisisStatus('festival')!=='running'))throw httpError(400,'Task unavailable');
   if(t.assigned_to&&t.assigned_to!==player.id)throw httpError(409,'Already claimed by another player');
   run('UPDATE tasks SET assigned_to=? WHERE id=?',player.id,t.id);return {ok:true};
  }
@@ -459,7 +492,7 @@ async function doAction(a,body){advanceWorld();const op=clean(body.op),g=getGame
  }
  if(op==='helpTask'){
   if(g.round!==4)throw httpError(409,'Tasks are not active');
-  const t=row('SELECT * FROM tasks WHERE id=?',clean(body.id));if(!t||t.village_id!==player.village_id||!t.assigned_to||t.done)throw httpError(400,'Task unavailable');
+  const t=row('SELECT * FROM tasks WHERE id=?',clean(body.id));if(!t||t.village_id!==player.village_id||!t.assigned_to||t.done||t.cancelled||(t.type==='red'&&crisisStatus('festival')!=='running'))throw httpError(400,'Task unavailable');
   const last=row("SELECT at FROM events WHERE village_id=? AND kind='help' AND details=? ORDER BY id DESC LIMIT 1",player.village_id,`${player.id}:${t.id}`);
   if(last&&at()-last.at<60000)throw httpError(429,'You can help this task again after one minute');
   if(t.assigned_to===player.id)throw httpError(409,'Help is for a teammate’s task. Your own task progresses automatically.');
@@ -475,8 +508,13 @@ async function handler(req,res){try{
  if(req.method==='GET'&&path==='/healthz')return json(res,200,{ok:!!row('SELECT id FROM game WHERE id=1'),app:'digital-village'});
  res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Frame-Options','DENY');
  if(path.startsWith('/api/')){
-  const a=auth(req);
-  if(req.method==='GET'&&path==='/api/state')return json(res,200,currentState(a,Number(url.searchParams.get('history')||0)));
+  let a=auth(req);
+  if(req.method==='GET'&&path==='/api/state')return json(res,200,currentState(a,Number(url.searchParams.get('history')||0),sha(parseCookie(req))));
+  if(req.method==='GET'&&path==='/api/final-report'){
+   const report=lifecycle.read(a?.player?.id,sha(parseCookie(req)),url.searchParams.get('token'));
+   if(!report)throw httpError(404,'Saved report not found.');
+   return json(res,200,report);
+  }
   if(req.method==='GET'&&path==='/api/reports'){
    if(!a)throw httpError(401,'Please sign in');
    const requested=Number(url.searchParams.get('round'));
@@ -492,7 +530,7 @@ async function handler(req,res){try{
   }
   if(req.method!=='POST')throw httpError(405,'Method not allowed');
   const origin=req.headers.origin;if(origin){const o=new URL(origin);const expected=(process.env.PUBLIC_BASE_URL?new URL(process.env.PUBLIC_BASE_URL).host:req.headers.host);if(o.host!==expected)throw httpError(403,'Invalid request origin');}
-  const b=await bodyJson(req);
+  const b=await bodyJson(req);a=auth(req);
   if(path==='/api/register'){throttle(req,'register',80,3600000);const result=await register(b);return json(res,result.queued?202:200,result);}
   if(path==='/api/login'){throttle(req,'login',300,900000);return json(res,200,login(b.email,b.pin,res,req));}
   if(path==='/api/admin/login'){
@@ -502,14 +540,19 @@ async function handler(req,res){try{
   }
   if(path==='/api/logout'){const token=parseCookie(req);if(token)run('DELETE FROM sessions WHERE token_hash=?',sha(token));res.setHeader('Set-Cookie','dv_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');return json(res,200,{ok:true});}
   if(path==='/api/action')return json(res,200,await doAction(a,b));
-  if(path==='/api/admin/delete-data'){
-   requireAdmin(a);throttle(req,'wipe-data',3,3600000);
-   if(pinDeliveries.size||securityDelivery||mailQueue.active)throw httpError(409,'Email is being processed. Wait for it to finish before erasing accounts.');
-   if(b.confirm!=='DELETE ALL PLAYER DATA')throw httpError(400,'Confirmation mismatch');
+  if(path==='/api/admin/delete-data'||path==='/api/admin/reset-game'){
+   requireAdmin(a);
+   if(getGame().phase!=='ended')throw httpError(409,'Reset is available only after the session ends.');
+   if(pinDeliveries.size||securityDelivery||mailQueue.activeSession)throw httpError(409,'Account email is still being processed. Try again shortly.');
+   if(b.confirm!=='RESET FINISHED GAME')throw httpError(400,'Confirmation mismatch');
    const got=Buffer.from(clean(b.password)),expected=Buffer.from(ADMIN_PASSWORD);
    if(got.length!==expected.length||!timingSafeEqual(got,expected))throw httpError(403,'Host password is incorrect');
-   tx(()=>{for(const table of ['mail_jobs','mail_provider_refs','mail_deliveries','security_answers','round_reports','round_starts','crisis_losses','news_choices','news_context','news_sources','news','posts','tasks','investments','snapshots','events','outbox','sessions','players'])run(`DELETE FROM ${table}`);for(const v of VILLAGES)run('UPDATE villages SET budget=?,youth=?,internet=?,education=?,services=?,jobs=?,trust=? WHERE id=?',v.budget,v.youth,v.internet,v.education,v.services,v.jobs,v.trust,v.id);run("UPDATE game SET round=0,phase='waiting',started_at=0,elapsed_ms=0,last_sim_at=0,crisis_fired=0,tickets_fired=0,news_revealed=0,media_revealed=0,festival_resolved=0,security_sent=0,last_dynamic_event_at=0 WHERE id=1");});
-   res.setHeader('Set-Cookie','dv_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
+   tx(()=>{
+    if(getGame().phase!=='ended')throw httpError(409,'Session already reset.');
+    lifecycle.reset(b.sessionId);
+    for(const v of VILLAGES)run('UPDATE villages SET budget=?,youth=?,internet=?,education=?,services=?,jobs=?,trust=? WHERE id=?',v.budget,v.youth,v.internet,v.education,v.services,v.jobs,v.trust,v.id);
+    run("UPDATE game SET round=0,phase='waiting',started_at=0,elapsed_ms=0,last_sim_at=0,crisis_fired=0,tickets_fired=0,news_revealed=0,media_revealed=0,festival_resolved=0,security_sent=0,last_dynamic_event_at=0 WHERE id=1");
+   });
    return json(res,200,{ok:true});
   }
   if(path==='/api/admin/enrol'){
@@ -541,10 +584,12 @@ async function handler(req,res){try{
   throw httpError(404,'Unknown endpoint');
  }
  if(req.method!=='GET'&&req.method!=='HEAD')throw httpError(405,'Method not allowed');
- const file=path==='/'?'index.html':path.slice(1);
- if(!['index.html','app.js','report-ui.js','style.css','favicon.svg'].includes(file))throw httpError(404,'Not found');
+ const file=path==='/phishing'?'phishing.html':path==='/'?'index.html':path.slice(1);
+ if(!['index.html','phishing.html','app.js','report-ui.js','style.css','favicon.svg'].includes(file))throw httpError(404,'Not found');
  const content=await readFile(join(ROOT,'public',file));res.writeHead(200,{'Content-Type':mime[extname(file)],'Cache-Control':file==='index.html'?'no-store':'public, max-age=120','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"});res.end(req.method==='HEAD'?undefined:content);
  }catch(e){const code=e.status||500;if(code>=500)console.error(e);if(e.retryAfter)res.setHeader('Retry-After',String(e.retryAfter));json(res,code,{error:e.status?e.message:'Server error',...(e.retryAfter?{retryAfter:e.retryAfter}:{})});}}
+if(getGame().phase==='ended')tx(()=>lifecycle.finalize());
+
 // Persisted rounds resume under host control, without simulating hours of downtime.
 const recovered=getGame();
 if(recovered.phase==='playing')tx(()=>{
