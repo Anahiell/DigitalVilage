@@ -1,0 +1,34 @@
+name: Session regression tests
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Unit and integration tests, including session regression and handler load
+        run: node --test --test-concurrency=2 tests/*.test.js
+      - name: HTTP load with 30 players
+        run: npm run load-test
+      - run: npx playwright install --with-deps chromium
+      - name: Desktop and mobile browser flows
+        run: node --test --test-concurrency=1 tests/*.e2e.mjs
+        env:
+          DV_ARTIFACTS: test-results/session-controls
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: session-control-screenshots
+          path: test-results/session-controls
+          if-no-files-found: ignore

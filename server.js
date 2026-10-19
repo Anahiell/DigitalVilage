@@ -100,6 +100,9 @@ CREATE TABLE IF NOT EXISTS outbox (
 );
 `);
 if(!db.prepare('PRAGMA table_info(posts)').all().some(c=>c.name==='credits'))db.exec("ALTER TABLE posts ADD COLUMN credits TEXT NOT NULL DEFAULT ''");
+for(const [column,definition] of [['phase_reason',"TEXT NOT NULL DEFAULT ''"],['phase_changed_at','INTEGER NOT NULL DEFAULT 0'],['phase_revision','INTEGER NOT NULL DEFAULT 0']]){
+ if(!db.prepare('PRAGMA table_info(game)').all().some(c=>c.name===column))db.exec(`ALTER TABLE game ADD COLUMN ${column} ${definition}`);
+}
 db.exec('CREATE TABLE IF NOT EXISTS exercise_recipients(player_id TEXT PRIMARY KEY)');
 db.exec("CREATE TABLE IF NOT EXISTS crisis_controls(kind TEXT PRIMARY KEY,status TEXT NOT NULL,trigger_ms INTEGER NOT NULL,paused_at INTEGER NOT NULL DEFAULT 0)");
 if(!db.prepare('PRAGMA table_info(tasks)').all().some(c=>c.name==='cancelled'))db.exec('ALTER TABLE tasks ADD COLUMN cancelled INTEGER NOT NULL DEFAULT 0');
@@ -232,7 +235,7 @@ function closeRound(reason='manual',timestamp=at()){
  const elapsedMs=Math.min(ROUNDS[g.round-1].duration*1000,roundElapsed(g,timestamp));
  const report=buildRoundReport({round:g.round,startedAt:savedStart?.at??null,closedAt:timestamp,elapsedMs,reason,starts,villages:all('SELECT * FROM villages'),people:all('SELECT id,name,village_id,role,verified FROM players'),events:all('SELECT * FROM events WHERE round=? ORDER BY id',g.round),investments:all('SELECT * FROM investments'),news:all('SELECT * FROM news'),choices:all('SELECT * FROM news_choices'),posts:all('SELECT * FROM posts'),tasks:all('SELECT * FROM tasks'),answers:all('SELECT * FROM security_answers'),crisisLosses:all('SELECT * FROM crisis_losses WHERE round=?',g.round)});
  run('INSERT INTO round_reports VALUES(?,?,?)',g.round,timestamp,JSON.stringify(report));
- run("UPDATE game SET phase='review',elapsed_ms=? WHERE id=1",elapsedMs);
+ run("UPDATE game SET phase='review',elapsed_ms=?,phase_reason=?,phase_changed_at=?,phase_revision=phase_revision+1 WHERE id=1",elapsedMs,reason,timestamp);
  logEvent(g.round,null,'review',`Round ${g.round} closed — village reports ready`,'The host opens the next round after discussion.',timestamp);
  recordBaseline(g.round);return report;
 }
@@ -245,6 +248,7 @@ function recordDelivery(entry){
 }
 const mailer=createWorkshopMailer({record:recordDelivery,writeOutbox:(to,subject,body)=>run('INSERT INTO outbox(email,subject,body,at) VALUES(?,?,?,?)',to,subject,body,at())});
 const mailQueue=createMailQueue({db,secret:PIN_PEPPER,mailer,record:recordDelivery,
+ deferred:job=>job.kind==='exercise'&&getGame().phase==='paused',
  eligible:context=>{if(!context.playerId)return true;const p=row('SELECT * FROM players WHERE id=?',context.playerId);if(!p)return false;if(context.action==='exercise')return true;return p.pin_lookup===context.expectedLookup;},
  onAccepted:context=>{if(context.action==='resend')run('UPDATE players SET pin_hash=?,pin_lookup=?,attempts=0,locked_until=0,pin_sent_at=? WHERE id=? AND pin_lookup=?',context.pinHash,context.pinLookup,at(),context.playerId,context.expectedLookup);else if(context.action==='registration')run('UPDATE players SET pin_sent_at=? WHERE id=? AND pin_lookup=?',at(),context.playerId,context.expectedLookup);},
  onFailed:context=>{if(context.action==='registration')run('DELETE FROM players WHERE id=? AND verified=0 AND pin_lookup=?',context.playerId,context.expectedLookup);},
@@ -341,6 +345,12 @@ function currentState(a,knownHistory=0,tokenHash=''){advanceWorld();const g=getG
  base.builtInvestments=all('SELECT village_id,investment_id FROM investments');
  base.serverTime=at();
  base.game.sessionId=lifecycle.sessionId();base.crisisControls=all('SELECT * FROM crisis_controls');
+ Object.assign(base.game,{phaseReason:g.phase_reason,phaseChangedAt:g.phase_changed_at,phaseRevision:g.phase_revision,remainingMs:Math.max(0,base.game.durationMs-time)});
+ base.crisisControls=['funding','festival'].map(kind=>{
+  const control=base.crisisControls.find(c=>c.kind===kind)||{kind,status:'running',trigger_ms:kind==='funding'?600000:240000,paused_at:0};
+  const activeRound=g.round===(kind==='funding'?1:4),triggered=activeRound&&(kind==='funding'?g.crisis_fired:g.tickets_fired);
+  return {...control,effectiveStatus:control.status==='cancelled'?'cancelled':!activeRound?'inactive':kind==='funding'&&triggered?'completed':g.phase==='paused'?'session-paused':g.phase!=='playing'?'inactive':control.status,remainingMs:!activeRound||triggered||control.status==='cancelled'?null:Math.max(0,control.trigger_ms-(control.status==='paused'?control.paused_at:time))};
+ });
  if(person&&g.phase==='ended')base.finalReport=lifecycle.read(person.id);
  base.roundReportIndex=all('SELECT round,closed_at FROM round_reports ORDER BY round').map(r=>({round:r.round,closedAt:r.closed_at,name:ROUNDS[r.round-1].name}));
  if(['review','ended'].includes(g.phase)){const latest=row('SELECT data FROM round_reports ORDER BY round DESC LIMIT 1');base.latestRoundReport=latest?JSON.parse(latest.data):null;}
@@ -379,6 +389,7 @@ function resolveFestival(){const g=getGame();if(g.festival_resolved)return;
 }
 async function doAction(a,body){advanceWorld();const op=clean(body.op),g=getGame(),p=a?.player;
  if(body.sessionId&&body.sessionId!==lifecycle.sessionId())throw httpError(409,'The session has changed. Refresh before trying again.');
+ if(['start','next','pause','resume','closeRound','end'].includes(op)&&body.phaseRevision!==undefined&&body.phaseRevision!==g.phase_revision)throw httpError(409,'The game status changed. Refresh before trying again.');
  if(op==='setReady'){const player=requirePlayer(a);if(g.phase==='ended')throw httpError(409,'This session has ended.');participantMonitor.setReady(player.id,body.ready);return {ok:true};}
  if(op==='acknowledgeReport'){const player=requirePlayer(a);if(g.phase!=='ended')throw httpError(409,'No final report yet.');lifecycle.acknowledge(player.id);return {ok:true};}
  if(['pauseCrisis','resumeCrisis','cancelCrisis'].includes(op)){
@@ -402,6 +413,23 @@ async function doAction(a,body){advanceWorld();const op=clean(body.op),g=getGame
   requireAdmin(a);const g=getGame();
   if(g.phase==='ended'){if(op==='end')return {ok:true};throw httpError(409,'The simulation has finished. Its results are frozen.');}
   if(g.phase==='review'&&!['next','end','closeRound'].includes(op))throw httpError(409,'The round is closed. Its results are frozen.');
+  if(g.phase==='paused'&&!['pause','resume','closeRound','end'].includes(op))throw httpError(409,'The entire session is paused. Resume the game before changing the simulation.');
+  if(['pause','resume'].includes(op)){
+   if(!['playing','paused'].includes(g.phase))throw httpError(409,'Start a round before pausing or resuming the game.');
+   if(op==='pause'&&g.phase==='playing')tx(()=>{
+    run("UPDATE game SET phase='paused',elapsed_ms=?,phase_reason='host',phase_changed_at=?,phase_revision=phase_revision+1 WHERE id=1",roundElapsed(g),at());
+    logEvent(g.round,null,'pause','Entire session paused by the host','Round timers, economy, task progress and crisis timers are frozen.');
+   });
+   if(op==='resume'&&g.phase==='paused')tx(()=>{
+    const now=at(),eventAge=Math.max(0,g.started_at+g.elapsed_ms-g.last_dynamic_event_at);
+    const partialTick=Math.max(0,Math.min(9999,g.elapsed_ms-Math.max(0,g.last_sim_at-g.started_at)));
+    const pausedAt=g.phase_changed_at||now;
+    run("UPDATE mail_jobs SET expires_at=expires_at+MAX(0,?-MAX(created_at,?)),next_at=next_at+MAX(0,?-MAX(created_at,?)) WHERE kind='exercise'",now,pausedAt,now,pausedAt);
+    run("UPDATE game SET phase='playing',started_at=?,last_sim_at=?,last_dynamic_event_at=?,phase_reason='',phase_changed_at=?,phase_revision=phase_revision+1 WHERE id=1",now-g.elapsed_ms,now-partialTick,now-eventAge,now);
+    logEvent(g.round,null,'resume','Entire session resumed by the host','Timers and crises continue from their saved remaining time.');
+   });
+   return {ok:true};
+  }
   if(op==='closeRound'){
    if(!g.round||!['playing','paused','review'].includes(g.phase))throw httpError(409,'No active round to close.');
    tx(()=>closeRound('manual'));return {ok:true};
@@ -412,18 +440,13 @@ async function doAction(a,body){advanceWorld();const op=clean(body.op),g=getGame
    const next=g.round+1,now=at();
    tx(()=>{
     if(g.round)closeRound('advanced',now);
-    run("UPDATE game SET round=?,phase='playing',started_at=?,elapsed_ms=0,last_sim_at=?,crisis_fired=0,tickets_fired=0,last_dynamic_event_at=? WHERE id=1",next,now,now,now);
+    run("UPDATE game SET round=?,phase='playing',started_at=?,elapsed_ms=0,last_sim_at=?,crisis_fired=0,tickets_fired=0,last_dynamic_event_at=?,phase_reason='',phase_changed_at=?,phase_revision=phase_revision+1 WHERE id=1",next,now,now,now,now);
     recordRoundStart(next,now);
     if(next===2)generateRoundNews(now);
     if(next===4)addTasks('blue');
     logEvent(next,null,'round',`Round ${next} started`,ROUNDS[next-1].name);recordBaseline(next);
    });
    if(next===5){securityDelivery=sendSecurityNotifications().catch(e=>console.error('Security notification batch failed:',e.message)).finally(()=>{securityDelivery=null;});}
-  }
-  if(op==='pause'&&g.phase==='playing')run("UPDATE game SET phase='paused',elapsed_ms=? WHERE id=1",roundElapsed(g));
-  if(op==='resume'&&g.phase==='paused'){
-   const now=at(),eventAge=Math.max(0,g.started_at+g.elapsed_ms-g.last_dynamic_event_at);
-   run("UPDATE game SET phase='playing',started_at=?,last_sim_at=?,last_dynamic_event_at=? WHERE id=1",now-g.elapsed_ms,now,now-eventAge);
   }
   if(op==='shock'&&g.round===1&&!g.crisis_fired&&crisisStatus('funding')==='running')tx(()=>applyCrisis(g));
   if(op==='triggerTicket'&&g.round===4&&!g.tickets_fired&&crisisStatus('festival')==='running')tx(()=>{addTasks('red');run('UPDATE game SET tickets_fired=1 WHERE id=1');logEvent(4,null,'crisis','Urgent festival problems reported');});
@@ -437,7 +460,7 @@ async function doAction(a,body){advanceWorld();const op=clean(body.op),g=getGame
   }
   if(op==='end'){
    if(!g.round)throw httpError(409,'Start the simulation before finishing it.');
-   tx(()=>{closeRound('ended');run("UPDATE game SET phase='ended' WHERE id=1");lifecycle.finalize();logEvent(g.round,null,'round','Simulation finished');});
+   tx(()=>{closeRound('ended');run("UPDATE game SET phase='ended',phase_reason='host',phase_changed_at=?,phase_revision=phase_revision+1 WHERE id=1",at());lifecycle.finalize();logEvent(g.round,null,'round','Simulation finished by the host','Final reports are saved. To play again, reset the finished session; it cannot be resumed.');});
   }
   return {ok:true};
  }
@@ -569,7 +592,7 @@ async function handler(req,res){try{
     if(getGame().phase!=='ended')throw httpError(409,'Session already reset.');
     lifecycle.reset(b.sessionId);
     for(const v of VILLAGES)run('UPDATE villages SET budget=?,youth=?,internet=?,education=?,services=?,jobs=?,trust=? WHERE id=?',v.budget,v.youth,v.internet,v.education,v.services,v.jobs,v.trust,v.id);
-    run("UPDATE game SET round=0,phase='waiting',started_at=0,elapsed_ms=0,last_sim_at=0,crisis_fired=0,tickets_fired=0,news_revealed=0,media_revealed=0,festival_resolved=0,security_sent=0,last_dynamic_event_at=0 WHERE id=1");
+    run("UPDATE game SET round=0,phase='waiting',started_at=0,elapsed_ms=0,last_sim_at=0,crisis_fired=0,tickets_fired=0,news_revealed=0,media_revealed=0,festival_resolved=0,security_sent=0,last_dynamic_event_at=0,phase_reason='',phase_changed_at=?,phase_revision=phase_revision+1 WHERE id=1",at());
    });
    return json(res,200,{ok:true});
   }
@@ -611,7 +634,7 @@ if(getGame().phase==='ended')tx(()=>lifecycle.finalize());
 // Persisted rounds resume under host control, without simulating hours of downtime.
 const recovered=getGame();
 if(recovered.phase==='playing')tx(()=>{
- run("UPDATE game SET phase='paused',elapsed_ms=? WHERE id=1",Math.max(0,recovered.last_sim_at-recovered.started_at));
+ run("UPDATE game SET phase='paused',elapsed_ms=?,phase_reason='server_restart',phase_changed_at=?,phase_revision=phase_revision+1 WHERE id=1",Math.max(0,recovered.last_sim_at-recovered.started_at),at());
  logEvent(recovered.round,null,'recovery','Server restarted — simulation paused','The host can resume from the last saved simulation tick.');
 });
 if(getGame().round===5&&!getGame().security_sent&&getGame().phase!=='ended')securityDelivery=sendSecurityNotifications().catch(()=>console.error('Security notification setup remains incomplete.')).finally(()=>{securityDelivery=null;});
