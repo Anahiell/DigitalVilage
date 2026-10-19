@@ -3,11 +3,18 @@ import assert from 'node:assert/strict';
 import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {configuration,tunnelUrl,healthy,deploymentFiles,reserveDeployment,publish} from '../deploy/auto-domain/controller.mjs';
+import {configuration,tunnelUrl,healthy,deploymentFiles,reserveDeployment,publish,wranglerArgs,publicationError} from '../deploy/auto-domain/controller.mjs';
 
 const origin='https://new-verified-tunnel.trycloudflare.com',cfg=configuration({CLOUDFLARE_ACCOUNT_ID:'a'.repeat(32),CLOUDFLARE_API_TOKEN:'test-private-token'});
 const template=await readFile(new URL('../deploy/auto-domain/gateway.js',import.meta.url),'utf8');
 const good=(marker)=>new Response(JSON.stringify({ok:true,app:'digital-village'}),{headers:marker?{'X-Digital-Village-Tunnel':marker}:{}});
+test('Pages publication uses cwd config discovery and safe failure categories',()=>{
+ const args=wranglerArgs(cfg.project);assert.deepEqual(args.slice(1),['pages','deploy','public','--project-name',cfg.project,'--branch','main','--commit-dirty=true']);assert.ok(!args.includes('--config'));
+ assert.match(publicationError('Pages does not support custom paths for the Wrangler configuration file',cfg.token),/configuration/);
+ assert.match(publicationError('Authentication error [code: 10000]',cfg.token),/authentication/);
+ assert.match(publicationError('esbuild missing platform package',cfg.token),/dependencies/);
+ assert.ok(!publicationError('failed '+cfg.token,cfg.token).includes(cfg.token));
+});
 async function directory(t){const p=await mkdtemp(join(tmpdir(),'dv-auto-domain-'));t.after(()=>rm(p,{recursive:true,force:true}));return p;}
 
 test('automatic domain accepts only a valid private account/project and extracts the new tunnel',()=>{
