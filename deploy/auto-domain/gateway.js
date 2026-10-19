@@ -1,6 +1,6 @@
 // Cloudflare Pages advanced mode. Only the gateway runs here; SQLite and the game stay on the Pi.
 const DEFAULT_PI_ORIGIN='https://ide-recycling-alien-roll.trycloudflare.com';
-const staticPaths=new Set(['/','/index.html','/app.js','/report-ui.js','/phishing','/phishing.html','/phishing.js','/style.css','/favicon.svg','/healthz']);
+const staticPaths=new Set(['/','/index.html','/app.js','/report-ui.js','/workshop-ui.js','/poster-editor.js','/poster-model.js','/economy.js','/phishing','/phishing.html','/phishing.js','/style.css','/favicon.svg','/healthz']);
 const failure=(status,message)=>new Response(JSON.stringify({error:message}),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','X-Robots-Tag':'noindex, nofollow',...(status===503?{'Retry-After':'5'}:{})}});
 
 function piOrigin(value){
