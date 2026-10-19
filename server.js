@@ -107,6 +107,7 @@ if(!db.prepare('PRAGMA table_info(posts)').all().some(c=>c.name==='credits'))db.
 for(const [column,definition] of [['phase_reason',"TEXT NOT NULL DEFAULT ''"],['phase_changed_at','INTEGER NOT NULL DEFAULT 0'],['phase_revision','INTEGER NOT NULL DEFAULT 0'],['council_approvals','INTEGER NOT NULL DEFAULT 0'],['workshop_mode','INTEGER NOT NULL DEFAULT 0'],['peer_council','INTEGER NOT NULL DEFAULT 0']]){
  if(!db.prepare('PRAGMA table_info(game)').all().some(c=>c.name===column))db.exec(`ALTER TABLE game ADD COLUMN ${column} ${definition}`);
 }
+db.exec('CREATE TABLE IF NOT EXISTS exercise_penalties(player_id TEXT PRIMARY KEY,at INTEGER NOT NULL)');
 db.exec('CREATE TABLE IF NOT EXISTS exercise_recipients(player_id TEXT PRIMARY KEY)');
 db.exec("CREATE TABLE IF NOT EXISTS crisis_controls(kind TEXT PRIMARY KEY,status TEXT NOT NULL,trigger_ms INTEGER NOT NULL,paused_at INTEGER NOT NULL DEFAULT 0)");
 if(!db.prepare('PRAGMA table_info(tasks)').all().some(c=>c.name==='cancelled'))db.exec('ALTER TABLE tasks ADD COLUMN cancelled INTEGER NOT NULL DEFAULT 0');
@@ -247,8 +248,8 @@ function closeRound(reason='manual',timestamp=at()){
  report.durationMs=roundDuration(g);
  run('INSERT INTO round_reports VALUES(?,?,?)',g.round,timestamp,JSON.stringify(report));
  run("UPDATE game SET phase='review',elapsed_ms=?,phase_reason=?,phase_changed_at=?,phase_revision=phase_revision+1 WHERE id=1",elapsedMs,reason,timestamp);
- logEvent(g.round,null,'review',`Round ${g.round} closed — village reports ready`,'The host opens the next round after discussion.',timestamp);
- recordBaseline(g.round);return report;
+ logEvent(g.round,null,'review',`Round ${g.round} closed — village reports ready`,g.round===5&&g.peer_council?'Workshop complete. Personal certificates and reports are saved; genuine email follows after one minute.':'The host opens the next round after discussion.',timestamp);
+ recordBaseline(g.round);if(g.round===5&&g.peer_council){run("UPDATE game SET phase='ended',phase_reason='completed' WHERE id=1");lifecycle.finalize({delayMs:60000});}return report;
 }
 
 // Keep the original audit schema compatible with the previous release for rollback.
@@ -299,7 +300,7 @@ let securityDelivery=null;
 function enqueueExercise(person,resend=false){
  const target=invitationUrl();if(!target||(!resend&&row('SELECT 1 FROM exercise_recipients WHERE player_id=?',person.id)))return null;
  const token=participantMonitor.linkToken(person.id);
- const id=mailQueue.enqueue({to:person.email,subject:'Important: Digital City account notification',body:`Hello ${person.name},\n\nDigital City Notifications: a new account message is waiting for you. Review it here: ${target}phishing?t=${token}\n\nThis is part of the Digital Village educational security simulation. No passwords will be requested.`,kind:'exercise'},{action:'exercise',playerId:person.id});
+ const id=mailQueue.enqueue({to:person.email,subject:'Important: Digital City upgrade your village to a city',body:`Hello ${person.name},\n\nDigital City Awards: your village qualifies for city status. Claim your city upgrade here: ${target}phishing?t=${token}\n\nThis is part of the Digital Village educational security simulation. No passwords will be requested.`,kind:'exercise'},{action:'exercise',playerId:person.id});
  run('INSERT OR IGNORE INTO exercise_recipients VALUES(?)',person.id);participantMonitor.sent(person.id,id);return id;
 }
 async function sendSecurityNotifications(){
@@ -382,7 +383,7 @@ function currentState(a,knownHistory=0,tokenHash=''){advanceWorld();const g=getG
  if(g.phase==='ended')base.workshopStories=buildWorkshopStories(all('SELECT data FROM round_reports ORDER BY round').map(r=>JSON.parse(r.data)));
  if(person)base.helpCooldowns=Object.fromEntries(all("SELECT details,MAX(at) AS at FROM events WHERE kind='help' AND details LIKE ? AND at>? GROUP BY details",person.id+':%',at()-60000).map(e=>[e.details.slice(person.id.length+1),e.at+60000]));
  if(person){base.me=person;base.ready=participantMonitor.isReady(person.id);if(g.round===5)base.exerciseUrl='/phishing?t='+participantMonitor.linkToken(person.id);}
- if(a.admin){base.participants=participantMonitor.participants();base.admin=true;base.invitationUrl=invitationUrl();base.emailMode=mailSettings.mode;base.mailConfiguration={mode:mailSettings.mode,real:mailSettings.real,configured:mailSettings.configured,issues:mailSettings.issues,exercise:{...mailer.exerciseConfig,separate:mailer.exerciseSeparate,requested:mailer.exerciseRequested}};base.mailDeliveries=all("SELECT d.email,d.kind,d.status,d.provider,COALESCE(r.provider_id,'') AS provider_id,d.attempts,d.error_code,d.updated_at FROM mail_deliveries d LEFT JOIN mail_provider_refs r ON r.delivery_id=d.id ORDER BY d.updated_at DESC LIMIT 12");base.mailQueue={pending:row('SELECT COUNT(*) AS n FROM mail_jobs').n,active:mailQueue.active};base.outbox=DEV_MAIL?all('SELECT id,email,subject,body,at FROM outbox ORDER BY id DESC LIMIT 50'):[];base.stats={registered:base.people.length,verified:base.people.filter(p=>p.verified).length,active:base.people.filter(p=>p.last_seen>at()-35000).length};}
+ if(a.admin){base.participants=participantMonitor.participants().map(p=>({...p,penalized:!!row('SELECT 1 FROM exercise_penalties WHERE player_id=?',p.id)}));base.admin=true;base.invitationUrl=invitationUrl();base.emailMode=mailSettings.mode;base.mailConfiguration={mode:mailSettings.mode,real:mailSettings.real,configured:mailSettings.configured,issues:mailSettings.issues,exercise:{...mailer.exerciseConfig,separate:mailer.exerciseSeparate,requested:mailer.exerciseRequested}};base.mailDeliveries=all("SELECT d.email,d.kind,d.status,d.provider,COALESCE(r.provider_id,'') AS provider_id,d.attempts,d.error_code,d.updated_at FROM mail_deliveries d LEFT JOIN mail_provider_refs r ON r.delivery_id=d.id ORDER BY d.updated_at DESC LIMIT 12");base.mailQueue={pending:row('SELECT COUNT(*) AS n FROM mail_jobs').n,active:mailQueue.active};base.outbox=DEV_MAIL?all('SELECT id,email,subject,body,at FROM outbox ORDER BY id DESC LIMIT 50'):[];base.stats={registered:base.people.length,verified:base.people.filter(p=>p.verified).length,active:base.people.filter(p=>p.last_seen>at()-35000).length};}
  return base;
 }
 function canInvest(p){return ['mayor','finance','digital'].includes(p.role);}
@@ -409,7 +410,7 @@ function resolveFestival(){const g=getGame();if(g.festival_resolved)return;
 async function doAction(a,body){advanceWorld();const op=clean(body.op),g=getGame(),p=a?.player;
  if(body.sessionId&&body.sessionId!==lifecycle.sessionId())throw httpError(409,'The session has changed. Refresh before trying again.');
  if(['start','next','pause','resume','closeRound','end'].includes(op)&&body.phaseRevision!==undefined&&body.phaseRevision!==g.phase_revision)throw httpError(409,'The game status changed. Refresh before trying again.');
- if(['assessProject','roundReady','delegateMayor','checkNews','checkCampaign','shareCampaign','workTask'].includes(op)||(op==='helpTask'&&g.workshop_mode)){const result=workshop.action(a,body);if(op==='roundReady')reviewIfReady();return result;}
+ if(['assessProject','roundReady','delegateMayor','checkNews','checkCampaign','shareCampaign','workTask','solveTask'].includes(op)||(op==='helpTask'&&g.workshop_mode)){const result=tx(()=>workshop.action(a,body));if(op==='roundReady')reviewIfReady();return result;}
  if(op==='resolveCouncil'){requireAdmin(a);const result=council.resolve(body.id,body.status);reviewIfReady();return result;}
  if(op==='setReady'){const player=requirePlayer(a);if(g.phase==='ended')throw httpError(409,'This session has ended.');participantMonitor.setReady(player.id,body.ready);return {ok:true};}
  if(op==='acknowledgeReport'){const player=requirePlayer(a);if(g.phase!=='ended')throw httpError(409,'No final report yet.');lifecycle.acknowledge(player.id);return {ok:true};}
@@ -591,8 +592,8 @@ async function handler(req,res){try{
   const origin=req.headers.origin;if(origin){const o=new URL(origin);const expected=(process.env.PUBLIC_BASE_URL?new URL(process.env.PUBLIC_BASE_URL).host:req.headers.host);if(o.host!==expected)throw httpError(403,'Invalid request origin');}
   const b=await bodyJson(req);a=auth(req);
   if(path==='/api/exercise/open'){
-   throttle(req,'exercise-open',300,60000);
-   const tracked=tx(()=>participantMonitor.opened(b.token,b.eventId));return json(res,200,{ok:true,tracked});
+   throttle(req,'exercise-open',300,60000);advanceWorld();
+   const tracked=tx(()=>{const valid=participantMonitor.opened(b.token,b.eventId);if(valid&&b.claim===true){const g=getGame();if(g.peer_council&&g.round===5&&g.phase==='playing'){const person=row('SELECT p.* FROM players p JOIN exercise_tracking t ON t.player_id=p.id WHERE t.token_hash=?',createHash('sha256').update(b.token).digest('hex'));if(person&&!row('SELECT 1 FROM exercise_penalties WHERE player_id=?',person.id)){run('INSERT INTO exercise_penalties VALUES(?,?)',person.id,at());run('UPDATE villages SET budget=budget-1000,trust=MAX(0,trust-3) WHERE id=?',person.village_id);logEvent(5,person.village_id,'security',person.name+' claimed a simulated city upgrade','Simulation penalty: EUR 1,000 and 3 trust, once per participant. No real payment.');}}}return valid;});const penalized=tracked&&!!row('SELECT 1 FROM exercise_penalties p JOIN exercise_tracking t ON t.player_id=p.player_id WHERE t.token_hash=?',sha(b.token));return json(res,200,{ok:true,tracked,penalized});
   }
   if(path==='/api/admin/resend-exercise'){
    requireAdmin(a);throttle(req,'exercise-resend',90,900000);

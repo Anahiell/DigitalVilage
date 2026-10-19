@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdir} from 'node:fs/promises';
 import {join} from 'node:path';
 import {chromium,devices,expect} from '@playwright/test';
+import {ticketChallenge} from '../workshop.js';
 import {handlerFixture} from './handler-fixture.mjs';
 
 test('Android hour workshop: staged cards, city facts, shared draft review, deputy and red cooperative tickets',{timeout:90000},async t=>{
@@ -22,7 +23,7 @@ test('Android hour workshop: staged cards, city facts, shared draft review, depu
  // Appoint the media player; preserve their original role and transfer authority.
  const me=(await a.state(cookies.media)).me;await mayor.locator('.team-checkpoint details summary').click();await mayor.locator('.delegate-controls select').selectOption(me.id);await mayor.locator('[data-action=delegateMayor]').click();await expect(member.locator('.team-checkpoint')).toContainText('Player media (acting mayor)');assert.equal((await a.state(cookies.media)).me.role,'media');
  await a.action('closeRound');await a.action('next');await expect(member.locator('#task-filter')).toBeVisible();await member.locator('#task-filter').selectOption('all');await expect(member.locator('.task')).toHaveCount(15);a.tick(120000);await expect(member.locator('.task.red')).toHaveCount(5);
- await member.locator('.task.red [data-action=claimTask]').first().click();await expect(member.locator('.task.red [data-action=workTask]')).toHaveCount(1);await member.locator('.task.red [data-action=workTask]').click();
+ await member.locator('.task.red [data-action=claimTask]').first().click();await expect(member.locator('.task.red [data-action=workTask]')).toHaveCount(1);const ticket=(await a.state(cookies.media)).tasks.find(t=>t.assigned_to===me.id);const challenge=member.locator(`[data-task-id="${ticket.id}"] details`);await challenge.locator('summary').click();await member.waitForTimeout(2100);await expect(challenge).toHaveAttribute('open','');await challenge.locator(`[data-answer="${ticketChallenge(ticket).answer}"]`).click();await expect(challenge.locator('summary')).toContainText('Bonus saved');await member.locator('.task.red [data-action=workTask]').click();
  const red=(await a.state(cookies.media)).tasks.find(t=>t.assigned_to===me.id);await mayor.locator(`[data-task-id="${red.id}"] [data-action=helpTask]`).click();
  assert.equal(await member.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
  await a.action('pause');await expect(member.locator('body')).toHaveAttribute('data-phase','paused');await expect(member.locator('[data-action=workTask]')).toBeDisabled();await a.action('resume');await expect(member.locator('body')).toHaveAttribute('data-phase','playing');

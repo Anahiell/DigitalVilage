@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import {ticketChallenge} from '../workshop.js';
 import {handlerFixture} from './handler-fixture.mjs';
 import {VILLAGES,ROLES,SECURITY_QUESTIONS} from '../data.js';
 
@@ -58,15 +60,15 @@ test('30 bots play all five hour rounds, cooperate, save reports and reset while
     if(round===1&&second%60===0&&second<=120){const id=['fiber','school','center'][second/60];const p=await ok(a,'invest',{id},team[1]);await ok(a,'approveProposal',{id:p.proposalId},mayor);actions+=2;}
     if(round===2&&second%30===0){const s=await a.state(team[1].cookie),n=s.news.filter(n=>n.sourceVillage!==v.id).find(n=>!s.workshop.newsChecks.some(c=>c.news_id===n.id));if(n){await ok(a,'checkNews',{id:n.id,note:'Compared the number and projects with the dated city bulletin.'},team[1]);actions++;if(s.choices.filter(c=>c.village_id===v.id).length<6){const p=await ok(a,'chooseNews',{id:n.id},team[1]);await ok(a,'approveProposal',{id:p.proposalId},mayor);actions+=2;}}}
     if(round===3&&second===0){const author=team.find(b=>b.role==='media'),draft={title:'Visit '+v.name,body:'Meet our community and discover our accessible festival, local market and mountain trails. Join us on Saturday at 14:00 in the square!',assets:['mountains','community'],credits:'',version:0};await ok(a,'shareCampaign',draft,author);const d=(await a.state(mayor.cookie)).workshop.campaignDrafts.find(d=>d.village_id===v.id);await ok(a,'checkCampaign',{version:0,digest:d.digest,note:'Read all asset usage conditions and checked the invitation.'},mayor);const p=await ok(a,'publish',draft,author);await ok(a,'approveProposal',{id:p.proposalId},mayor);actions+=4;}
-    if(round===4){let s=await a.state(mayor.cookie);for(const task of s.tasks.filter(t=>t.village_id===v.id&&!t.assigned_to&&!t.done)){const owner=team.find(b=>b.role===task.required_role&&s.tasks.filter(t=>t.assigned_to===b.id&&!t.done).length<3)||team.find(b=>s.tasks.filter(t=>t.assigned_to===b.id&&!t.done).length<3);if(owner){await ok(a,'claimTask',{id:task.id},owner);actions++;s=await a.state(mayor.cookie);}}
+    if(round===4){let s=await a.state(mayor.cookie);for(const task of s.tasks.filter(t=>t.village_id===v.id&&!t.assigned_to&&!t.done)){const owner=team.find(b=>b.role===task.required_role&&s.tasks.filter(t=>t.assigned_to===b.id&&!t.done).length<3)||team.find(b=>s.tasks.filter(t=>t.assigned_to===b.id&&!t.done).length<3);if(owner){await ok(a,'claimTask',{id:task.id},owner);await ok(a,'solveTask',{id:task.id,answer:ticketChallenge(task).answer},owner);actions+=2;s=await a.state(mayor.cookie);}}
      for(const task of s.tasks.filter(t=>t.village_id===v.id&&t.assigned_to&&!t.done)){const owner=team.find(b=>b.id===task.assigned_to),helper=team.find(b=>b.id!==owner.id);await ok(a,'workTask',{id:task.id},owner);actions++;if(!(await a.state(mayor.cookie)).tasks.find(t=>t.id===task.id).done){await ok(a,'helpTask',{id:task.id},helper);actions++;}}}
-    if(round===5&&second===0)for(const b of team)for(const q of SECURITY_QUESTIONS){await ok(a,'answerSecurity',{id:q.id,answer:q.correct},b);actions++;}
+    if(round===5&&second===0)for(const b of team){if(bots.indexOf(b)%3===0){const state=await a.state(b.cookie),token=new URL(state.exerciseUrl,a.base).searchParams.get('t');assert.equal((await a.request('/api/exercise/open',{token,eventId:randomUUID(),claim:true})).status,200);}for(const q of SECURITY_QUESTIONS){await ok(a,'answerSecurity',{id:q.id,answer:q.correct},b);actions++;}}
    }
    a.tick(10000);
    // Poll a full wave each simulated minute; every bot must stay on the same round.
    if(second%60===0){const wave=await Promise.all(bots.map(b=>a.state(b.cookie)));assert.ok(wave.every(s=>s.game.round===round));}
   }
-  const s=await a.state();assert.equal(s.game.phase,'review');log.push({round,actions:actions-roundActions,tickets:s.tasks?.length||0,done:s.tasks?.filter(t=>t.done).length||0});
+  const s=await a.state();assert.equal(s.game.phase,s.game.round===5?'ended':'review');log.push({round,actions:actions-roundActions,tickets:s.tasks?.length||0,done:s.tasks?.filter(t=>t.done).length||0});
   if(round===4)assert.equal(s.tasks.filter(t=>t.done).length,s.tasks.length);
   if(round<5)await ok(a,'next');
  }
