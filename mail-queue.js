@@ -1,7 +1,7 @@
 import {createCipheriv,createDecipheriv,createHash,randomBytes,randomUUID} from 'node:crypto';
 
 // One local worker pool, one SQLite database. Payloads (including PINs) never enter the audit log.
-export function createMailQueue({db,secret,mailer,record=()=>{},eligible=()=>true,onAccepted=()=>{},onFailed=()=>{},onActive=()=>{},onIdle=()=>{},onError=()=>{},now=Date.now,maxAge=15*60000,concurrency=4}){
+export function createMailQueue({db,secret,mailer,record=()=>{},eligible=()=>true,deferred=()=>false,onAccepted=()=>{},onFailed=()=>{},onActive=()=>{},onIdle=()=>{},onError=()=>{},now=Date.now,maxAge=15*60000,concurrency=4}){
  if(typeof secret!=='string'||secret.length<20)throw Error('A strong persistent secret is required for the mail queue.');
  const key=createHash('sha256').update('digital-village/mail-queue/v1\0'+secret).digest(),running=new Map();let closed=false,backgroundRunning=0;
  const configFor=kind=>mailer.configFor?.(kind)||mailer.config;
@@ -28,6 +28,7 @@ export function createMailQueue({db,secret,mailer,record=()=>{},eligible=()=>tru
  function process(id){
   if(running.has(id))return running.get(id);
   const job=one(id);if(!job)return Promise.resolve({status:'finished'});
+  if(deferred(job))return Promise.resolve({status:'queued'});
   if(closed||running.size>=concurrency||(job.next_at>now()&&job.expires_at>now()))return Promise.resolve({status:'queued'});
   if(job.kind!=='pin'&&backgroundRunning>=Math.max(1,concurrency-1))return Promise.resolve({status:'queued'});
   if(job.kind!=='pin')backgroundRunning++;
@@ -50,8 +51,8 @@ export function createMailQueue({db,secret,mailer,record=()=>{},eligible=()=>tru
  }
  async function drain(){
   if(closed)return;
-  const time=now(),jobs=db.prepare("SELECT id FROM mail_jobs WHERE next_at<=? OR expires_at<=? ORDER BY CASE WHEN expires_at<=? THEN 0 ELSE 1 END,CASE WHEN kind='pin' THEN 0 ELSE 1 END,created_at,id").all(time,time,time);
-  await Promise.all(jobs.filter(job=>!running.has(job.id)).slice(0,Math.max(0,concurrency-running.size)).map(job=>process(job.id)));
+  const time=now(),jobs=db.prepare("SELECT * FROM mail_jobs WHERE next_at<=? OR expires_at<=? ORDER BY CASE WHEN expires_at<=? THEN 0 ELSE 1 END,CASE WHEN kind='pin' THEN 0 ELSE 1 END,created_at,id").all(time,time,time);
+  await Promise.all(jobs.filter(job=>!running.has(job.id)&&!deferred(job)).slice(0,Math.max(0,concurrency-running.size)).map(job=>process(job.id)));
  }
  function cancelPlayer(playerId){
   const jobs=db.prepare("SELECT * FROM mail_jobs WHERE player_id=? AND kind='pin'").all(playerId);
