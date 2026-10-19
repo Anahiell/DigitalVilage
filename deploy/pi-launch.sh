@@ -10,7 +10,7 @@ if [[ "$MODE" != --apply && "$MODE" != --funnel ]]; then
   exit 2
 fi
 if [[ "$(id -u)" == 0 ]]; then printf '%s\n' 'Run this as the regular Pi account. The script uses sudo only for system services.'; exit 1; fi
-for app_command in node npm git curl systemctl; do command -v "$app_command" >/dev/null || { printf 'Missing command: %s\n' "$app_command"; exit 1; }; done
+for app_command in node npm git curl systemctl systemd-analyze; do command -v "$app_command" >/dev/null || { printf 'Missing command: %s\n' "$app_command"; exit 1; }; done
 if ! git diff --quiet || ! git diff --cached --quiet; then printf '%s\n' 'Commit or stash local source edits before creating a release.'; exit 1; fi
 APP_PORT="$(node deploy/pi-config.mjs --port)"
 if [[ -f .env ]]; then node deploy/backup.mjs; fi
@@ -30,6 +30,8 @@ mkdir -p "$APP_RELEASE"
 git archive HEAD | tar -x -C "$APP_RELEASE"
 (cd "$APP_RELEASE" && npm ci --omit=dev --no-audit --no-fund && npm test && npm run load-test)
 node deploy/pi-config.mjs --unit --user "$(id -un)"
+# Reject invalid units before touching the active release or installed service.
+systemd-analyze verify "$APP_ROOT/runtime/digital-village.service"
 APP_PREVIOUS="$(readlink "$APP_ROOT/runtime/current" || true)"
 APP_OLD_UNIT="$APP_ROOT/runtime/previous-digital-village.service"
 if [[ -f /etc/systemd/system/digital-village.service ]]; then sudo cp /etc/systemd/system/digital-village.service "$APP_OLD_UNIT"; fi

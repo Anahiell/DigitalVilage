@@ -34,7 +34,7 @@ if(args.includes('--unit')){
  const user=args[args.indexOf('--user')+1],node=process.execPath;
  if(!/^[a-z_][a-z0-9_-]*\$?$/.test(user||''))throw Error('Invalid service account.');
  const quote=s=>'"'+s.replaceAll('\\','\\\\').replaceAll('"','\\"').replaceAll('%','%%')+'"';
- const unit=`[Unit]\nDescription=Digital Village workshop\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser=${user}\nWorkingDirectory=${quote(join(root,'runtime/current'))}\nEnvironmentFile=${quote(path)}\nExecStart=${quote(node)} server.js\nRestart=always\nRestartSec=5\nTimeoutStopSec=20\nUMask=0077\nNoNewPrivileges=true\n\n[Install]\nWantedBy=multi-user.target\n`;
+ const unit=`[Unit]\nDescription=Digital Village workshop\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser=${user}\nWorkingDirectory=${join(root,'runtime/current').replaceAll('%','%%')}\nEnvironmentFile=${quote(path)}\nExecStart=${quote(node)} server.js\nRestart=always\nRestartSec=5\nTimeoutStopSec=20\nUMask=0077\nNoNewPrivileges=true\n\n[Install]\nWantedBy=multi-user.target\n`;
  await mkdir(join(root,'runtime'),{recursive:true,mode:0o700});await writeFile(join(root,'runtime/digital-village.service'),unit,{mode:0o600});
 }
 if(errors.length){for(const error of errors)console.error('NEEDS ATTENTION: '+error);process.exitCode=1;}
