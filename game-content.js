@@ -68,8 +68,8 @@ export function buildRoundReport({round,startedAt,closedAt,elapsedMs,reason,star
   if(round===2)story.push(chosen.length?`The village shared ${decisions.news.correct} verified report(s) and ${decisions.news.false} fabricated report(s); these choices affected youth and public trust.`:'The council shared no reports, so no news-choice reward or penalty was applied.');
   if(round===3){const verdict=localEvents.find(e=>e.kind==='media');story.push(post?`The tourism campaign “${post.title}” was published. ${verdict?.details||''}`:'The village did not publish a tourism campaign.');}
   if(round===4){const verdict=localEvents.find(e=>e.kind==='festival');story.push(`${decisions.tasks.standardDone}/${decisions.tasks.standardTotal} standard tasks and ${decisions.tasks.urgentDone}/${decisions.tasks.urgentTotal} urgent tasks were completed. ${verdict?.title||'No festival outcome was recorded.'}.`);}
-  if(round===5)story.push(`${correct}/${localAnswers.length} submitted security responses were correct; ${decisions.security.possible-localAnswers.length} possible response(s) were left unanswered.`);
-  const incidents=localEvents.filter(e=>['random','shock','crisis'].includes(e.kind)).map(e=>({title:e.title,details:e.details}));
+  if(round===5){story.push(`${correct}/${localAnswers.length} submitted security responses were correct; ${decisions.security.possible-localAnswers.length} possible response(s) were left unanswered.`);const claims=localEvents.filter(e=>e.kind==='security'&&e.title.includes('claimed a simulated city upgrade'));if(claims.length)story.push(`${claims.length} simulated upgrade claim(s) incurred village penalties: ${claims.map(e=>e.title).join('; ')}. Each claim cost EUR 1,000 and three trust.`);}
+  const incidents=localEvents.filter(e=>['random','shock','crisis','security'].includes(e.kind)).map(e=>({title:e.title,details:e.details}));
   report.villages.push({id:v.id,name:v.name,emoji:v.emoji,start:start?metricSnapshot(start):null,stats,delta,team,decisions,incidents,story:story.join(' ')});
  }
  return report;
