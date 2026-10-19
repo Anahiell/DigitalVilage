@@ -17,6 +17,8 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci --no-audit --no-fund
+      - name: Validate optional domain autostart installer
+        run: bash -n deploy/auto-domain/install.sh
       - name: Unit and integration tests, including session regression and handler load
         run: node --test --test-concurrency=2 tests/*.test.js
       - name: HTTP load with 30 players

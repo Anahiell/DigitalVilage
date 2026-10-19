@@ -4,6 +4,8 @@ A mobile-first multiplayer teaching simulation for the RURALEM / Erasmus+ Digita
 
 **Arriving with the Pi? Start with [the Russian arrival instructions](deploy/ARRIVAL_RU.md).** The tested code does not update the physical Pi until you run the update there. A real inbox and the venue network still need a delivery/connectivity check.
 
+For the existing `digitvillage-play.pages.dev` address, [optional free domain automation](deploy/auto-domain/README.md) starts the game tunnel after reboot and updates the gateway without changing the QR. It requires one private, account-scoped Cloudflare Pages API token entered on the Pi.
+
 ## Implemented experience
 
 | Round | What participants do | What changes |
