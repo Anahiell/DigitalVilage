@@ -94,6 +94,6 @@ test('real-mode registration, both sender tests and round-five exercise for ever
  const exercises=sent.slice(3);assert.ok(exercises.every(m=>m.from===`Digital Village <${exercise}>`));
  assert.deepEqual(exercises.map(m=>m.to).sort(),['consent@test.example','no-consent@test.example']);
  assert.ok(exercises.every(m=>m.text.includes('/phishing')&&m.text.includes('No passwords will be requested')));
- const reveal=await app.request('/phishing');assert.equal(reveal.status,200);assert.match(reveal.data,/Это был фишинг/);
+ const reveal=await app.request('/phishing');assert.equal(reveal.status,200);assert.match(reveal.data,/This was phishing/);
 
 });

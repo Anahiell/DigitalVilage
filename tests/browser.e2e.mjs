@@ -17,7 +17,7 @@ test('browser: live controls, final modal, OK, reconnect, confirmed reset and pu
  await page.locator('#login-form [name=email]').fill('browser@test.example');await page.locator('#login-form [name=pin]').fill(account.data.pin);
  await page.locator('#login-form button[type=submit]').click();await expect(page.locator('.sidebar')).toBeVisible();
  await hostPage.goto(app.base);await hostPage.locator('[data-view=admin]').first().click();
- await expect(hostPage.getByRole('button',{name:'Сбросить игру'})).toBeDisabled();
+ await expect(hostPage.getByRole('button',{name:'Reset game'})).toBeDisabled();
  await hostPage.locator('[data-action=start]').click();await expect(hostPage.locator('[data-action=pauseCrisis]')).toBeVisible();
  await hostPage.locator('[data-action=pauseCrisis]').click();await expect(hostPage.getByText('Crisis: paused',{exact:true})).toBeVisible();
  await hostPage.locator('[data-action=resumeCrisis]').click();await expect(hostPage.getByText('Crisis: running',{exact:true})).toBeVisible();
@@ -30,13 +30,13 @@ test('browser: live controls, final modal, OK, reconnect, confirmed reset and pu
  await participant.setOffline(true);await participant.setOffline(false);await page.reload();
  await expect(dialog).not.toBeVisible();await page.getByRole('button',{name:'Open final personal report'}).click();await expect(dialog).toBeVisible();
  await page.getByRole('button',{name:'OK — return to home'}).click();
- await expect(hostPage.getByRole('button',{name:'Сбросить игру'})).toBeEnabled();
- hostPage.once('dialog',d=>d.dismiss());await hostPage.getByRole('button',{name:'Сбросить игру'}).click();
+ await expect(hostPage.getByRole('button',{name:'Reset game'})).toBeEnabled();
+ hostPage.once('dialog',d=>d.dismiss());await hostPage.getByRole('button',{name:'Reset game'}).click();
  assert.equal((await app.request('/api/state',undefined,admin)).data.game.phase,'ended');
  const answers=['','RESET FINISHED GAME',app.password];hostPage.on('dialog',d=>d.accept(answers.shift()));
- await hostPage.getByRole('button',{name:'Сбросить игру'}).click();await expect(hostPage.getByRole('button',{name:'Сбросить игру'})).toBeDisabled();
+ await hostPage.getByRole('button',{name:'Reset game'}).click();await expect(hostPage.getByRole('button',{name:'Reset game'})).toBeDisabled();
  await page.reload();await expect(page.getByRole('heading',{name:'Final village report'})).toBeVisible();
  const publicPage=await browser.newPage();await publicPage.goto(app.base+'/phishing');
- await expect(publicPage.getByRole('heading',{name:'Опа, привет! Это был фишинг.'})).toBeVisible();assert.equal(await publicPage.locator('input').count(),0);
+ await expect(publicPage.getByRole('heading',{name:'Oops, hello! This was phishing.'})).toBeVisible();assert.equal(await publicPage.locator('input').count(),0);
  assert.deepEqual(errors,[]);
 });
