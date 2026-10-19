@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 
-test('generated WorkingDirectory has no literal quotes; systemd validates it before release activation',async t=>{
+test('generated service paths have no literal quotes; systemd validates it before release activation',async t=>{
  const root=await mkdtemp(join(tmpdir(),'dv-unit-'));t.after(()=>rm(root,{recursive:true,force:true}));
  await mkdir(join(root,'deploy'));await mkdir(join(root,'runtime/current'),{recursive:true});
  for(const file of ['deploy/pi-config.mjs','mailer.js'])await copyFile(file,join(root,file));
@@ -14,10 +14,12 @@ test('generated WorkingDirectory has no literal quotes; systemd validates it bef
  const path=join(root,'runtime/digital-village.service'),unit=await readFile(path,'utf8');
  assert.equal(unit.match(/^WorkingDirectory=(.*)$/m)[1],join(root,'runtime/current'));
  assert.ok(!unit.match(/^WorkingDirectory=(.*)$/m)[1].startsWith('"'));
- assert.match(unit,/^EnvironmentFile="/m);assert.match(unit,/^ExecStart="/m);
+ assert.equal(unit.match(/^EnvironmentFile=(.*)$/m)[1],join(root,'.env'));
+ assert.match(unit,/^ExecStart="/m);
  if(process.platform==='linux'){
   const verify=spawnSync('systemd-analyze',['verify',path],{encoding:'utf8'});
   assert.equal(verify.status,0,verify.stderr||String(verify.error));
+  assert.equal(verify.stderr.trim(),'','systemd warnings can silently ignore required settings');
  }
  const launcher=await readFile('deploy/pi-launch.sh','utf8');
  const verification=launcher.indexOf('systemd-analyze verify');assert.ok(verification>=0);

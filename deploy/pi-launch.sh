@@ -31,7 +31,15 @@ git archive HEAD | tar -x -C "$APP_RELEASE"
 (cd "$APP_RELEASE" && npm ci --omit=dev --no-audit --no-fund && npm test && npm run load-test)
 node deploy/pi-config.mjs --unit --user "$(id -un)"
 # Reject invalid units before touching the active release or installed service.
-systemd-analyze verify "$APP_ROOT/runtime/digital-village.service"
+if ! APP_UNIT_CHECK="$(systemd-analyze verify "$APP_ROOT/runtime/digital-village.service" 2>&1)"; then
+  printf '%s\n' "$APP_UNIT_CHECK"
+  exit 1
+fi
+# Some systemd versions return success while warning that EnvironmentFile is ignored.
+if [[ -n "$APP_UNIT_CHECK" ]]; then
+  printf '%s\n' "$APP_UNIT_CHECK" 'Unit validation produced diagnostics; the running service was not changed.'
+  exit 1
+fi
 APP_PREVIOUS="$(readlink "$APP_ROOT/runtime/current" || true)"
 APP_OLD_UNIT="$APP_ROOT/runtime/previous-digital-village.service"
 if [[ -f /etc/systemd/system/digital-village.service ]]; then sudo cp /etc/systemd/system/digital-village.service "$APP_OLD_UNIT"; fi
