@@ -1,7 +1,9 @@
+import {normaliseLayout} from './public/poster-model.js';
 import {createHash} from 'node:crypto';
 // Opt-in rules for new one-hour workshops. Existing sessions retain their rules.
 export function createWorkshop({db,game,elapsed,now,error,log,investments}){
- db.exec(`CREATE TABLE IF NOT EXISTS round_ready(player_id TEXT PRIMARY KEY,round INTEGER NOT NULL,ready INTEGER NOT NULL);
+ db.exec(`CREATE TABLE IF NOT EXISTS project_notes(player_id TEXT NOT NULL,asset_id TEXT NOT NULL,note TEXT NOT NULL,PRIMARY KEY(player_id,asset_id));
+ CREATE TABLE IF NOT EXISTS round_ready(player_id TEXT PRIMARY KEY,round INTEGER NOT NULL,ready INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS acting_mayors(village_id TEXT PRIMARY KEY,player_id TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS task_collaboration(task_id TEXT NOT NULL,player_id TEXT NOT NULL,kind TEXT NOT NULL,at INTEGER NOT NULL,PRIMARY KEY(task_id,player_id,kind));
  CREATE TABLE IF NOT EXISTS news_checks(player_id TEXT NOT NULL,news_id TEXT NOT NULL,note TEXT NOT NULL,PRIMARY KEY(player_id,news_id));
@@ -9,7 +11,7 @@ export function createWorkshop({db,game,elapsed,now,error,log,investments}){
  CREATE TABLE IF NOT EXISTS campaign_drafts(village_id TEXT PRIMARY KEY,author_id TEXT NOT NULL,payload TEXT NOT NULL,digest TEXT NOT NULL);`);
  const one=(sql,...args)=>db.prepare(sql).get(...args),all=(sql,...args)=>db.prepare(sql).all(...args),run=(sql,...args)=>db.prepare(sql).run(...args);
  const fail=(code,text)=>{throw error(code,text);};
- const digest=b=>createHash('sha256').update(JSON.stringify({title:String(b.title||'').trim(),body:String(b.body||'').trim(),credits:String(b.credits||'').trim(),assets:[...new Set(Array.isArray(b.assets)?b.assets:[])],version:Number(b.version)})).digest('hex');
+ const digest=b=>createHash('sha256').update(JSON.stringify({title:String(b.title||'').trim(),body:String(b.body||'').trim(),credits:String(b.credits||'').trim(),assets:[...new Set(Array.isArray(b.assets)?b.assets:[])],version:Number(b.version),layout:(()=>{try{return normaliseLayout(b.layout);}catch(e){fail(400,e.message);}})()})).digest('hex');
  const enabled=()=>!!game().workshop_mode;
  const duration=g=>g.workshop_mode?480000:0;
  const trigger=(g,kind)=>g.workshop_mode?(kind==='funding'?240000:120000):(kind==='funding'?600000:240000);
@@ -25,6 +27,7 @@ export function createWorkshop({db,game,elapsed,now,error,log,investments}){
    if(!approving&&!one('SELECT 1 FROM news_checks WHERE news_id=? AND player_id=?',b.id,player.id))fail(409,'Open the city record and save your fact-check before proposing this story.');
   }
   if(b.op==='publish'&&!approving){
+   if(game().peer_council&&(String(b.body||'').length<80||!/(join|visit|register|book)/i.test(b.body||'')||!Array.isArray(b.assets)||!b.assets.length))fail(400,'Complete the festival brief: at least 80 characters, a call to action and one visual asset.');
    const people=one('SELECT COUNT(*) AS n FROM players WHERE village_id=? AND verified=1',player.village_id).n;
    if(people>1&&!all('SELECT c.* FROM campaign_checks c JOIN players p ON p.id=c.player_id WHERE p.village_id=? AND c.version=? AND c.player_id<>? AND c.digest=?',player.village_id,b.version,player.id,digest(b)).length)fail(409,'Ask a teammate to complete the campaign checklist before submitting this version.');
   }
@@ -67,7 +70,7 @@ export function createWorkshop({db,game,elapsed,now,error,log,investments}){
    const pending=one("SELECT COUNT(*) AS n FROM council_proposals WHERE village_id=? AND round=? AND status='pending'",v.village_id,g.round).n;
    return {villageId:v.village_id,total:v.total,ready:members.filter(p=>p.ready).length,complete:members.every(p=>p.ready)&&!pending,members,pending};
   });
-  return {teams,allReady:teams.length>0&&teams.every(t=>t.complete),myReady:!!(player&&one('SELECT ready FROM round_ready WHERE player_id=? AND round=?',player.id,g.round)?.ready),actingMayors:all('SELECT * FROM acting_mayors'),canApprove:!!player&&canApprove(player),investmentUnlocks:investments.map((i,index)=>({id:i.id,atMs:index*60000})),newsSchedule:admin||g.round>=2?all('SELECT id FROM news').map(n=>({id:n.id,atMs:newsRelease(n.id)})):[],newsChecks:player?all('SELECT * FROM news_checks WHERE player_id=?',player.id):[],campaignChecks:all('SELECT c.player_id,c.version,c.note,c.digest,p.name,p.village_id FROM campaign_checks c JOIN players p ON p.id=c.player_id').filter(c=>admin||c.village_id===player?.village_id),campaignDrafts:all('SELECT * FROM campaign_drafts').filter(d=>admin||d.village_id===player?.village_id).map(d=>({...d,payload:JSON.parse(d.payload)})),taskChecks:admin?all('SELECT * FROM task_collaboration'):all('SELECT c.* FROM task_collaboration c JOIN tasks t ON t.id=c.task_id WHERE t.village_id=?',player?.village_id||'')};
+  return {projectNotes:all('SELECT n.*,p.name,p.role,p.village_id FROM project_notes n JOIN players p ON p.id=n.player_id').filter(n=>admin||n.village_id===player?.village_id),teams,allReady:teams.length>0&&teams.every(t=>t.complete),myReady:!!(player&&one('SELECT ready FROM round_ready WHERE player_id=? AND round=?',player.id,g.round)?.ready),actingMayors:all('SELECT * FROM acting_mayors'),canApprove:!!player&&canApprove(player),investmentUnlocks:investments.map((i,index)=>({id:i.id,atMs:index*60000})),newsSchedule:admin||g.round>=2?all('SELECT id FROM news').map(n=>({id:n.id,atMs:newsRelease(n.id)})):[],newsChecks:player?all('SELECT * FROM news_checks WHERE player_id=?',player.id):[],campaignChecks:all('SELECT c.player_id,c.version,c.note,c.digest,p.name,p.village_id FROM campaign_checks c JOIN players p ON p.id=c.player_id').filter(c=>admin||c.village_id===player?.village_id),campaignDrafts:all('SELECT * FROM campaign_drafts').filter(d=>admin||d.village_id===player?.village_id).map(d=>({...d,payload:JSON.parse(d.payload)})),taskChecks:admin?all('SELECT * FROM task_collaboration'):all('SELECT c.* FROM task_collaboration c JOIN tasks t ON t.id=c.task_id WHERE t.village_id=?',player?.village_id||'')};
  }
  function action(a,b){
   const g=game(),p=a?.player;if(!enabled())fail(409,'Start a new one-hour workshop to use this feature.');
@@ -82,6 +85,7 @@ export function createWorkshop({db,game,elapsed,now,error,log,investments}){
   }
   if(!p)fail(401,'Sign in as a player.');
   if(g.phase!=='playing')fail(409,'Wait for the host to resume.');
+  if(b.op==='assessProject'){if(g.round!==1||!availableInvestment(b.id)||!investments.some(i=>i.id===b.id))fail(409,'Research an available project in round one.');const note=String(b.note||'').trim();if(note.length<15||note.length>300)fail(400,'Give a concrete recommendation (15–300 characters).');run('INSERT INTO project_notes VALUES(?,?,?) ON CONFLICT(player_id,asset_id) DO UPDATE SET note=excluded.note',p.id,b.id,note);return {ok:true,message:'Research shared with your team. It does not spend money.'};}
   if(b.op==='roundReady'){
    if(typeof b.ready!=='boolean')fail(400,'Choose ready or not ready.');
    run('INSERT INTO round_ready VALUES(?,?,?) ON CONFLICT(player_id) DO UPDATE SET round=excluded.round,ready=excluded.ready',p.id,g.round,b.ready?1:0);return {ok:true};
@@ -95,7 +99,7 @@ export function createWorkshop({db,game,elapsed,now,error,log,investments}){
    if(g.round!==3||g.media_revealed||typeof b.title!=='string'||b.title.trim().length<5||b.title.length>100||typeof b.body!=='string'||b.body.length<20||b.body.length>1200||String(b.credits||'').length>300||!Array.isArray(b.assets)||b.assets.length>5||b.assets.some(id=>typeof id!=='string'))fail(400,'Share a valid draft with title, text and up to five assets.');
    const version=one('SELECT updated_at FROM posts WHERE village_id=?',p.village_id)?.updated_at||0;if(Number(b.version)!==version)fail(409,'Load the current campaign version before sharing.');
    run('DELETE FROM round_ready WHERE player_id IN (SELECT id FROM players WHERE village_id=?)',p.village_id);
-   const payload={title:b.title,body:b.body,credits:b.credits||'',assets:b.assets,version};run('INSERT INTO campaign_drafts VALUES(?,?,?,?) ON CONFLICT(village_id) DO UPDATE SET author_id=excluded.author_id,payload=excluded.payload,digest=excluded.digest',p.village_id,p.id,JSON.stringify(payload),digest(payload));return {ok:true,message:'Draft shared with your council. Ask a different teammate to review it.'};
+   let layout;try{layout=normaliseLayout(b.layout);}catch(e){fail(400,e.message);}const payload={title:b.title,body:b.body,credits:b.credits||'',assets:b.assets,version,layout};run('INSERT INTO campaign_drafts VALUES(?,?,?,?) ON CONFLICT(village_id) DO UPDATE SET author_id=excluded.author_id,payload=excluded.payload,digest=excluded.digest',p.village_id,p.id,JSON.stringify(payload),digest(payload));return {ok:true,message:'Draft shared with your council. Ask a different teammate to review it.'};
   }
   if(b.op==='checkCampaign'){
    if(g.round!==3||g.media_revealed)fail(409,'Campaign review is closed.');const version=one('SELECT updated_at FROM posts WHERE village_id=?',p.village_id)?.updated_at||0;

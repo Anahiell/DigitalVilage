@@ -20,11 +20,13 @@ The browser's **Start the game** starts the new one-hour rules. Existing session
 
 These are five eight-minute active rounds plus twenty minutes of host-led briefing and discussion. Pauses extend wall-clock time, so the host must manage the discussion budget. A deadline opens the frozen **review** phase; it does not silently start the next round. Use **End** after round five to archive personal reports and queue report emails.
 
-## Readiness and decision lead
+## Readiness and peer decisions
 
 Lobby readiness never starts round one. During a round, each participant marks **My round work is finished**. The host sees each team's count and pending proposals. **All teams ready — close round** only succeeds when every verified participant is ready and no pending council decisions remain. Manual round close remains available for absent participants or a hard deadline. New proposals and shared campaign drafts withdraw team readiness.
 
-The mayor or host can appoint any verified teammate as acting mayor from **Change decision lead**. Their original role remains unchanged; approval authority moves to the deputy exclusively. The host can restore the original mayor, including during a pause or review. Delegation persists across reconnection/restart and clears on session reset. There is no automatic takeover based on unreliable connectivity; the host explicitly chooses the replacement.
+New sessions use [peer confirmation and majority discussion](peer-council-and-poster.md), so no mayor is required. Any other teammate can confirm a proposal; the host can explicitly resolve a stalled discussion.
+
+In older saved formats only, the mayor or host can appoint any verified teammate as acting mayor from **Change decision lead**. Their original role remains unchanged; approval authority moves to the deputy exclusively. The host can restore the original mayor, including during a pause or review. Delegation persists across reconnection/restart and clears on session reset. There is no automatic takeover based on unreliable connectivity; the host explicitly chooses the replacement.
 
 ## Live development
 
@@ -42,7 +44,7 @@ Before proposing a story, the proposer saves a short fact-check describing the n
 
 ## Campaign cooperation
 
-An author shares the draft with the council. A different teammate reads its text, assets, usage cards and credit, then saves a review. The check is bound to the exact text/assets/credits and current published version. An altered draft needs a new check. The author submits the checked draft for mayor approval. Local editor text survives polling; teammates can load the shared draft into their own editor. Single-player rehearsals can publish without an unavailable second participant.
+An author shares the draft with the council. A different teammate reads its text, assets, usage cards and credit, then saves a review. The check is bound to the exact text/assets/credits and current published version. An altered draft needs a new check. The author submits the checked draft for peer confirmation. Local editor text survives polling; teammates can load the shared draft into their own editor. Single-player rehearsals can publish without an unavailable second participant.
 
 ## Festival tickets
 

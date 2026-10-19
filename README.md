@@ -86,3 +86,5 @@ Each row shows the latest exercise delivery status, error code and request count
 Checks: `npm run test:monitor` runs a real-handler/SQLite integration rehearsal for 30 participants in process, with no listening socket or real email. `npm run test:e2e` includes Chromium checks for the participant tab, readiness, personal-link opens and resend controls.
 
 One-hour format: [host agenda and cooperative rules](docs/one-hour-workshop.md).
+
+[Peer decisions, mobile poster editor and campaign economics](docs/peer-council-and-poster.md).

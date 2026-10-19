@@ -97,12 +97,14 @@ CREATE TABLE IF NOT EXISTS news_context (news_id TEXT PRIMARY KEY,explanation TE
 CREATE TABLE IF NOT EXISTS news_sources (village_id TEXT PRIMARY KEY,data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS crisis_losses (round INTEGER NOT NULL,village_id TEXT NOT NULL,amount INTEGER NOT NULL,PRIMARY KEY(round,village_id));
 CREATE TABLE IF NOT EXISTS security_answers (player_id TEXT NOT NULL REFERENCES players(id),question_id TEXT NOT NULL,answer_id TEXT NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(player_id,question_id));
+CREATE TABLE IF NOT EXISTS campaign_licences(village_id TEXT NOT NULL,asset_id TEXT NOT NULL,fee INTEGER NOT NULL,PRIMARY KEY(village_id,asset_id));
 CREATE TABLE IF NOT EXISTS outbox (
  id INTEGER PRIMARY KEY AUTOINCREMENT,email TEXT NOT NULL,subject TEXT NOT NULL,body TEXT NOT NULL,at INTEGER NOT NULL
 );
 `);
+if(!db.prepare('PRAGMA table_info(posts)').all().some(c=>c.name==='layout'))db.exec("ALTER TABLE posts ADD COLUMN layout TEXT NOT NULL DEFAULT '{}'");
 if(!db.prepare('PRAGMA table_info(posts)').all().some(c=>c.name==='credits'))db.exec("ALTER TABLE posts ADD COLUMN credits TEXT NOT NULL DEFAULT ''");
-for(const [column,definition] of [['phase_reason',"TEXT NOT NULL DEFAULT ''"],['phase_changed_at','INTEGER NOT NULL DEFAULT 0'],['phase_revision','INTEGER NOT NULL DEFAULT 0'],['council_approvals','INTEGER NOT NULL DEFAULT 0'],['workshop_mode','INTEGER NOT NULL DEFAULT 0']]){
+for(const [column,definition] of [['phase_reason',"TEXT NOT NULL DEFAULT ''"],['phase_changed_at','INTEGER NOT NULL DEFAULT 0'],['phase_revision','INTEGER NOT NULL DEFAULT 0'],['council_approvals','INTEGER NOT NULL DEFAULT 0'],['workshop_mode','INTEGER NOT NULL DEFAULT 0'],['peer_council','INTEGER NOT NULL DEFAULT 0']]){
  if(!db.prepare('PRAGMA table_info(game)').all().some(c=>c.name===column))db.exec(`ALTER TABLE game ADD COLUMN ${column} ${definition}`);
 }
 db.exec('CREATE TABLE IF NOT EXISTS exercise_recipients(player_id TEXT PRIMARY KEY)');
@@ -241,7 +243,7 @@ function closeRound(reason='manual',timestamp=at()){
  const savedStart=row('SELECT * FROM round_starts WHERE round=?',g.round);
  const starts=savedStart?JSON.parse(savedStart.data):VILLAGES.map(v=>row('SELECT * FROM snapshots WHERE village_id=? AND round=? ORDER BY id LIMIT 1',v.id,g.round)).filter(Boolean).map(v=>({...v,id:v.village_id}));
  const elapsedMs=Math.min(roundDuration(g),roundElapsed(g,timestamp));
- const report=buildRoundReport({round:g.round,startedAt:savedStart?.at??null,closedAt:timestamp,elapsedMs,reason,starts,villages:all('SELECT * FROM villages'),people:all('SELECT id,name,village_id,role,verified FROM players'),events:all('SELECT * FROM events WHERE round=? ORDER BY id',g.round),investments:all('SELECT * FROM investments'),news:all('SELECT * FROM news'),choices:all('SELECT * FROM news_choices'),posts:all('SELECT * FROM posts'),tasks:all('SELECT * FROM tasks'),answers:all('SELECT * FROM security_answers'),crisisLosses:all('SELECT * FROM crisis_losses WHERE round=?',g.round)});
+ const report=buildRoundReport({round:g.round,startedAt:savedStart?.at??null,closedAt:timestamp,elapsedMs,reason,starts,villages:all('SELECT * FROM villages'),people:all('SELECT id,name,village_id,role,verified FROM players'),events:all('SELECT * FROM events WHERE round=? ORDER BY id',g.round),investments:all('SELECT * FROM investments'),news:all('SELECT * FROM news'),choices:all('SELECT * FROM news_choices'),posts:readPosts(),tasks:all('SELECT * FROM tasks'),answers:all('SELECT * FROM security_answers'),crisisLosses:all('SELECT * FROM crisis_losses WHERE round=?',g.round)});
  report.durationMs=roundDuration(g);
  run('INSERT INTO round_reports VALUES(?,?,?)',g.round,timestamp,JSON.stringify(report));
  run("UPDATE game SET phase='review',elapsed_ms=?,phase_reason=?,phase_changed_at=?,phase_revision=phase_revision+1 WHERE id=1",elapsedMs,reason,timestamp);
@@ -339,17 +341,19 @@ function login(email,pin,res,req){email=clean(email).toLowerCase();pin=clean(pin
 }
 const workshop=createWorkshop({db,game:getGame,elapsed:roundElapsed,now:at,error:httpError,log:logEvent,investments:INVESTMENTS});
 function roundDuration(g){return workshop.duration(g)||(ROUNDS[g.round-1]?.duration||0)*1000;}
+function readPosts(){return all('SELECT * FROM posts').map(p=>({...p,licensed_assets:all('SELECT asset_id FROM campaign_licences WHERE village_id=?',p.village_id).map(x=>x.asset_id)}));}
 const council=createCouncil({db,getGame,canApprove:workshop.canApprove,beforeDecision:workshop.beforeDecision,sessionId:()=>lifecycle.sessionId(),investments:INVESTMENTS,assets:MEDIA_ASSETS,now:at,log:logEvent,baseline:recordBaseline,error:httpError});
 function currentState(a,knownHistory=0,tokenHash=''){advanceWorld();const g=getGame(),villages=all('SELECT * FROM villages');
- const time=roundElapsed(g);const base={privacyContact:process.env.PRIVACY_CONTACT||'',emailConfigured:emailConfigured(),game:{round:g.round,phase:g.phase,elapsedMs:time,durationMs:roundDuration(g),newsRevealed:!!g.news_revealed,mediaRevealed:!!g.media_revealed,crisisFired:!!g.crisis_fired,ticketsFired:!!g.tickets_fired},rounds:ROUNDS.map(r=>({...r,duration:g.workshop_mode?480:r.duration})),villages:villages.map(v=>({...v,budget:Math.round(v.budget),youth:Math.round(v.youth),trust:Math.round(v.trust)})),investments:INVESTMENTS,roles:ROLES,assets:MEDIA_ASSETS.map(x=>({id:x.id,label:x.label,symbol:x.symbol,kind:x.kind,color:x.color,usage:x.usage,credit:x.credit||'',...(g.media_revealed||a?.admin?{allowed:x.allowed}:{})})),events:all('SELECT * FROM events ORDER BY id DESC LIMIT 24'),slots:all('SELECT village_id,role,verified FROM players').map(p=>({village:p.village_id,role:p.role,verified:!!p.verified}))};
+ const time=roundElapsed(g);const base={privacyContact:process.env.PRIVACY_CONTACT||'',emailConfigured:emailConfigured(),game:{round:g.round,phase:g.phase,elapsedMs:time,durationMs:roundDuration(g),newsRevealed:!!g.news_revealed,mediaRevealed:!!g.media_revealed,crisisFired:!!g.crisis_fired,ticketsFired:!!g.tickets_fired},rounds:ROUNDS.map(r=>({...r,duration:g.workshop_mode?480:r.duration})),villages:villages.map(v=>({...v,budget:Math.round(v.budget),youth:Math.round(v.youth),trust:Math.round(v.trust)})),investments:INVESTMENTS,roles:ROLES,assets:MEDIA_ASSETS.map(x=>({id:x.id,label:x.label,symbol:x.symbol,kind:x.kind,color:x.color,usage:x.usage,licenceFee:x.licenceFee||0,credit:x.credit||'',...(g.media_revealed||a?.admin?{allowed:x.allowed}:{})})),events:all('SELECT * FROM events ORDER BY id DESC LIMIT 24'),slots:all('SELECT village_id,role,verified FROM players').map(p=>({village:p.village_id,role:p.role,verified:!!p.verified}))};
  if(!a)return {...base,restricted:true,archivedReport:lifecycle.read(null,tokenHash)};
  const person=a.player; if(person)run('UPDATE players SET last_seen=? WHERE id=?',at(),person.id);
  const showNews=g.round>=2 || a.admin;
  if(showNews){const mayorByVillage=Object.fromEntries(all("SELECT village_id,name FROM players WHERE role='mayor' AND verified=1").map(x=>[x.village_id,x.name]));
  base.news=all('SELECT n.*,c.explanation,c.as_of FROM news n LEFT JOIN news_context c ON c.news_id=n.id ORDER BY n.rowid').filter(n=>a.admin||workshop.availableNews(n.id)).map(x=>({id:x.id,sourceVillage:x.source_village,headline:x.headline,body:x.body,signer:x.signer==='OFFICIAL_MAYOR'?(mayorByVillage[x.source_village]||'Official Village Council'):x.signer,seal:x.seal,...(g.news_revealed||a.admin?{authentic:!!x.authentic,explanation:x.explanation||'Compare the signer and seal with the official council record.'}:{})}));
  base.choices=all('SELECT * FROM news_choices');base.newsSources=all('SELECT data FROM news_sources').map(x=>JSON.parse(x.data));}
- if(g.media_revealed||a.admin)base.campaignReviews=Object.fromEntries(all('SELECT * FROM posts').map(p=>[p.village_id,campaignReview(p)]));
- base.posts=all('SELECT * FROM posts').map(p=>({...p,assetIds:JSON.parse(p.asset_ids)}));
+ if(g.media_revealed||a.admin)base.campaignReviews=Object.fromEntries(readPosts().map(p=>[p.village_id,campaignReview(p)]));
+ base.assetLicences=all('SELECT * FROM campaign_licences');
+ base.posts=readPosts().map(p=>({...p,assetIds:JSON.parse(p.asset_ids),layout:JSON.parse(p.layout||'{}')}));
  if(g.round>=4||a.admin)base.tasks=g.workshop_mode&&!a.admin?all('SELECT * FROM tasks WHERE cancelled=0 AND village_id=?',person.village_id):all('SELECT * FROM tasks WHERE cancelled=0');
  base.historyVersion=row('SELECT COALESCE(MAX(id),0) AS n FROM snapshots').n;
  if(!knownHistory||knownHistory!==base.historyVersion)base.histories=Object.fromEntries(villages.map(v=>[v.id,all('SELECT at,budget,youth,trust,internet,jobs,services,education FROM snapshots WHERE village_id=? ORDER BY id DESC LIMIT 150',v.id).reverse()]));
@@ -357,7 +361,7 @@ function currentState(a,knownHistory=0,tokenHash=''){advanceWorld();const g=getG
  base.builtInvestments=all('SELECT village_id,investment_id FROM investments');
  base.serverTime=at();
  base.game.sessionId=lifecycle.sessionId();base.crisisControls=all('SELECT * FROM crisis_controls');
- base.game.workshopMode=!!g.workshop_mode;if(g.workshop_mode)base.workshop=workshop.state(person,a.admin);
+ base.game.peerCouncil=!!g.peer_council;base.game.workshopMode=!!g.workshop_mode;if(g.workshop_mode)base.workshop=workshop.state(person,a.admin);
  base.game.councilApprovals=!!g.council_approvals;base.proposals=council.list(person,a.admin);
  Object.assign(base.game,{phaseReason:g.phase_reason,phaseChangedAt:g.phase_changed_at,phaseRevision:g.phase_revision,remainingMs:Math.max(0,base.game.durationMs-time)});
  base.crisisControls=['funding','festival'].map(kind=>{
@@ -386,7 +390,7 @@ function resolveNews(){const g=getGame();if(g.news_revealed)return;
  run('UPDATE game SET news_revealed=1 WHERE id=1');recordBaseline(g.round);
 }
 function resolveMedia(){const g=getGame();if(g.media_revealed)return;
- for(const p of all('SELECT * FROM posts')){const reviewed=campaignReview(p);const violations=reviewed.filter(a=>!a.permitted).length,good=reviewed.length-violations;
+ for(const p of readPosts()){const reviewed=campaignReview(p);const violations=reviewed.filter(a=>!a.permitted).length,good=reviewed.length-violations;
   const budgetDelta=good*650-violations*2500;const trustDelta=good*1-violations*4;const youthDelta=violations?-violations:Math.max(1,Math.round(good/2));
   run('UPDATE villages SET budget=MAX(0,budget+?),trust=MAX(0,MIN(100,trust+?)),youth=MAX(25,youth+?) WHERE id=?',budgetDelta,trustDelta,youthDelta,p.village_id);
   logEvent(g.round,p.village_id,'media','Tourism campaign evaluated',`${violations} problematic asset(s). Budget ${budgetDelta>=0?'+':''}€${budgetDelta}.`);
@@ -404,10 +408,11 @@ function resolveFestival(){const g=getGame();if(g.festival_resolved)return;
 async function doAction(a,body){advanceWorld();const op=clean(body.op),g=getGame(),p=a?.player;
  if(body.sessionId&&body.sessionId!==lifecycle.sessionId())throw httpError(409,'The session has changed. Refresh before trying again.');
  if(['start','next','pause','resume','closeRound','end'].includes(op)&&body.phaseRevision!==undefined&&body.phaseRevision!==g.phase_revision)throw httpError(409,'The game status changed. Refresh before trying again.');
- if(['roundReady','delegateMayor','checkNews','checkCampaign','shareCampaign','workTask'].includes(op)||(op==='helpTask'&&g.workshop_mode))return workshop.action(a,body);
+ if(['assessProject','roundReady','delegateMayor','checkNews','checkCampaign','shareCampaign','workTask'].includes(op)||(op==='helpTask'&&g.workshop_mode))return workshop.action(a,body);
+ if(op==='resolveCouncil'){requireAdmin(a);return council.resolve(body.id,body.status);}
  if(op==='setReady'){const player=requirePlayer(a);if(g.phase==='ended')throw httpError(409,'This session has ended.');participantMonitor.setReady(player.id,body.ready);return {ok:true};}
  if(op==='acknowledgeReport'){const player=requirePlayer(a);if(g.phase!=='ended')throw httpError(409,'No final report yet.');lifecycle.acknowledge(player.id);return {ok:true};}
- if(g.council_approvals&&['invest','chooseNews','unchooseNews','publish','approveProposal','rejectProposal'].includes(op))return council.handle(requirePlayer(a),body);
+ if(g.council_approvals&&['invest','licenseAsset','chooseNews','unchooseNews','publish','approveProposal','rejectProposal'].includes(op))return council.handle(requirePlayer(a),body);
  if(op==='adjustVillage'){
   requireAdmin(a);if(g.phase!=='playing')throw httpError(409,'Resume the active round before intervening.');
   const metric=String(body.metric),limits={budget:250000,youth:100,internet:25,education:25,services:25,jobs:25,trust:25},delta=Number(body.delta);
@@ -462,7 +467,7 @@ async function doAction(a,body){advanceWorld();const op=clean(body.op),g=getGame
    if(op==='next'&&(g.round<1||g.round>=5))throw httpError(409,'Cannot advance the game');
    const next=g.round+1,now=at();
    tx(()=>{
-    if(op==='start'){run('UPDATE game SET council_approvals=?,workshop_mode=? WHERE id=1',body.councilApprovals===true||body.workshopMode===true?1:0,body.workshopMode===true?1:0);}
+    if(op==='start'){run('UPDATE game SET council_approvals=?,workshop_mode=?,peer_council=? WHERE id=1',body.councilApprovals===true||body.workshopMode===true?1:0,body.workshopMode===true?1:0,body.peerCouncil===true&&body.workshopMode===true?1:0);}
     if(g.round)closeRound('advanced',now);
     run("UPDATE game SET round=?,phase='playing',started_at=?,elapsed_ms=0,last_sim_at=?,crisis_fired=0,tickets_fired=0,last_dynamic_event_at=?,phase_reason='',phase_changed_at=?,phase_revision=phase_revision+1 WHERE id=1",next,now,now,now,now);
     recordRoundStart(next,now);
@@ -652,7 +657,7 @@ async function handler(req,res){try{
  }
  if(req.method!=='GET'&&req.method!=='HEAD')throw httpError(405,'Method not allowed');
  const file=path==='/phishing'?'phishing.html':path==='/'?'index.html':path.slice(1);
- if(!['index.html','phishing.html','phishing.js','app.js','workshop-ui.js','report-ui.js','style.css','favicon.svg'].includes(file))throw httpError(404,'Not found');
+ if(!['index.html','phishing.html','phishing.js','app.js','poster-editor.js','poster-model.js','workshop-ui.js','report-ui.js','style.css','favicon.svg'].includes(file))throw httpError(404,'Not found');
  const content=await readFile(join(ROOT,'public',file));res.writeHead(200,{'Content-Type':mime[extname(file)],'Cache-Control':file==='index.html'?'no-store':'public, max-age=120','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"});res.end(req.method==='HEAD'?undefined:content);
  }catch(e){const code=e.status||500;if(code>=500)console.error(e);if(e.retryAfter)res.setHeader('Retry-After',String(e.retryAfter));json(res,code,{error:e.status?e.message:'Server error',...(e.retryAfter?{retryAfter:e.retryAfter}:{})});}}
 if(getGame().phase==='ended')tx(()=>lifecycle.finalize());

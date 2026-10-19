@@ -22,7 +22,7 @@ try{
  const messages=(await api('state',undefined,admin)).outbox;assert.equal(messages.length,30);
  const pins=Object.fromEntries(messages.map(m=>[m.email,m.body.split('PIN is: ')[1].slice(0,6)]));
  const logins=await Promise.all(users.map(async u=>({user:u,cookie:(await api('login',{email:u.email,pin:pins[u.email]})).cookie})));
- await api('action',{op:'start',workshopMode:hourly},admin);
+ await api('action',{op:'start',workshopMode:hourly,peerCouncil:hourly},admin);
  for(let wave=0;wave<8;wave++){if(hourly&&wave)await new Promise(r=>setTimeout(r,1000));const data=await Promise.all(logins.map(u=>api('state',undefined,u.cookie)));assert.ok(data.every(s=>s.game.round===1))}
  const mayor=logins.find(l=>l.user.role==='mayor');await api('action',{op:'invest',id:'fiber'},mayor.cookie);await api('action',{op:'grant',amount:3000,village:'green-valley'},admin);
  for(let r=2;r<=5;r++){await api('action',{op:'next'},admin);const data=await Promise.all(logins.map(u=>api('state',undefined,u.cookie)));assert.ok(data.every(s=>s.game.round===r))}

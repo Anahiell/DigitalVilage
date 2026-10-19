@@ -43,6 +43,11 @@ export const MEDIA_ASSETS=[
  {id:'cc',label:'CC BY licensed illustration',symbol:'CC',kind:'licensed',color:'#d5f9e6',allowed:true},
  {id:'unknown',label:'Unlicensed stock illustration',symbol:'★',kind:'licensed',color:'#ffd9d7',allowed:false}
 ];
+// Real brand names; costs and contracts are fictional workshop scenarios.
+MEDIA_ASSETS.push(...[
+ ['nike','Nike','NIKE','#f1f1ef',2400],['adidas','adidas','adidas','#e5e5e5',2200],['coca-cola','Coca-Cola','Coca-Cola','#f7c8ca',3000],['red-bull','Red Bull','Red Bull','#d7dcf7',2800],['spotify','Spotify','Spotify','#bde9c5',1800],['netflix','Netflix','NETFLIX','#efc6cc',0],['google','Google','Google','#dce9fe',2000],['youtube','YouTube','YouTube','#ffd0cf',1800],['tiktok','TikTok','TikTok','#d8edee',2400],['samsung','Samsung','SAMSUNG','#d9e2fa',2600],['lego','LEGO','LEGO','#ffe5ac',1500],['ikea','IKEA','IKEA','#cee8fb',1600],['starbucks','Starbucks','STARBUCKS','#c9e2d8',2500],['tesla','Tesla','TESLA','#efc7c8',0],['visa','Visa','VISA','#dee4ff',0],['mastercard','Mastercard','Mastercard','#ffe0c3',0],['amazon','Amazon','amazon','#ffe3ae',2200],['canon','Canon','Canon','#ffd5d4',1400],['adobe','Adobe','Adobe','#ffcfcb',0],['microsoft','Microsoft','Microsoft','#e0ebd6',2300]
+].map(([id,label,symbol,color,licenceFee])=>({id,label:label+' brand tile',symbol,color,kind:'brand',allowed:false,licenceFee})));
+
 export const FESTIVAL_TASKS=[
  {title:'Reserve event venue',type:'blue',role:'events',minutes:4,description:'Confirm a suitable meeting space with accessible entry.'},
  {title:'Publish festival programme',type:'blue',role:'media',minutes:5,description:'Share the programme and clear directions.'},
@@ -61,5 +66,6 @@ export const SECURITY_QUESTIONS=[
 
 for(const asset of MEDIA_ASSETS){
  asset.usage=asset.allowed?'Workshop asset: reuse is permitted in this tourism campaign.':asset.kind==='brand'?'No sponsorship agreement is supplied. Do not present the brand as this campaign’s sponsor.':'No reuse licence or source is supplied. Obtain permission before publishing.';
+ if(asset.licenceFee)asset.usage=`Fictional workshop contract: €${asset.licenceFee} from the village budget. Obtain team approval before publishing. This is a game scenario, not real brand permission.`;
  if(asset.id==='cc'){asset.requiresCredit=true;asset.credit='Digital Village workshop artwork (CC BY)';asset.usage='CC BY training asset: include the supplied credit when publishing.';}
 }

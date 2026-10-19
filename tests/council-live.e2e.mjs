@@ -17,10 +17,10 @@ test('mobile council journey: briefing, stable polls, mayor approval, live metri
  await host.locator('[data-view=admin]').first().click();await host.getByRole('button',{name:'▶ Start the game',exact:true}).click();
  await expect(member.locator('.round-mission')).toContainText('ROUND 1 OF 5');await expect(member.getByRole('button',{name:'Propose investment'}).first()).toBeEnabled();
  a.tick(60000);await expect(member.locator('[data-action=invest][data-id=school]')).toBeVisible();const before=(await a.state()).villages[0].budget;
- await member.locator('[data-action=invest][data-id=school]').click();await expect(member.locator('[data-action=invest][data-id=school]')).toHaveText('Awaiting mayor');
+ await member.locator('[data-action=invest][data-id=school]').click();await expect(member.locator('[data-action=invest][data-id=school]')).toHaveText('Awaiting review');
  await expect(member.locator('[data-action=invest][data-id=school]')).toBeDisabled();
  assert.equal((await a.state()).builtInvestments.length,0);
- await mayor.locator('[data-view=council]').last().click();await expect(mayor.getByText(/Proposed by Mobile Events/)).toBeVisible();await mayor.getByRole('button',{name:'Approve and apply',exact:true}).click();
+ await mayor.locator('[data-view=council]').last().click();await expect(mayor.getByText(/Proposed by Mobile Events/)).toBeVisible();await mayor.getByRole('button',{name:'Support proposal',exact:true}).click();
  await expect(member.locator('[data-action=invest][data-id=school]')).toHaveText('Completed');assert.ok((await a.state()).villages[0].budget<before);
  // The grant input and details must remain the same nodes across real polls.
  if(!await host.locator('.host-setup').evaluate(e=>e.open))await host.locator('.host-setup > summary').click();await host.locator('#grant-form input').fill('12345');await host.locator('#grant-form input').focus();
