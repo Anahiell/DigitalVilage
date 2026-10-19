@@ -379,7 +379,7 @@ function showFinalReport(){
  let dialog=$id('final-report-dialog');
  if(!dialog){dialog=document.createElement('dialog');dialog.id='final-report-dialog';dialog.className='final-report-dialog';dialog.setAttribute('aria-label','Final personal report');document.body.append(dialog);}
  dialog.innerHTML=renderFinalReport(state.finalReport)+`<button type="button" class="primary" data-action="acknowledge-final-report">OK — return to home</button>`;
- dialog.showModal();
+ dialog.showModal();const heading=dialog.querySelector('h2');if(heading){heading.tabIndex=-1;heading.focus({preventScroll:true});}dialog.scrollTop=0;
 }
 const reportToken=new URL(location.href).searchParams.get('report');
 if(reportToken){
