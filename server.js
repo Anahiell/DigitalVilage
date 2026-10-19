@@ -341,6 +341,7 @@ function login(email,pin,res,req){email=clean(email).toLowerCase();pin=clean(pin
 }
 const workshop=createWorkshop({db,game:getGame,elapsed:roundElapsed,now:at,error:httpError,log:logEvent,investments:INVESTMENTS});
 function roundDuration(g){return workshop.duration(g)||(ROUNDS[g.round-1]?.duration||0)*1000;}
+function reviewIfReady(){const g=getGame();if(g.peer_council&&g.phase==='playing'&&workshop.state(null,true).allReady)tx(()=>closeRound('team_ready'));}
 function readPosts(){return all('SELECT * FROM posts').map(p=>({...p,licensed_assets:all('SELECT asset_id FROM campaign_licences WHERE village_id=?',p.village_id).map(x=>x.asset_id)}));}
 const council=createCouncil({db,getGame,canApprove:workshop.canApprove,beforeDecision:workshop.beforeDecision,sessionId:()=>lifecycle.sessionId(),investments:INVESTMENTS,assets:MEDIA_ASSETS,now:at,log:logEvent,baseline:recordBaseline,error:httpError});
 function currentState(a,knownHistory=0,tokenHash=''){advanceWorld();const g=getGame(),villages=all('SELECT * FROM villages');
@@ -408,11 +409,11 @@ function resolveFestival(){const g=getGame();if(g.festival_resolved)return;
 async function doAction(a,body){advanceWorld();const op=clean(body.op),g=getGame(),p=a?.player;
  if(body.sessionId&&body.sessionId!==lifecycle.sessionId())throw httpError(409,'The session has changed. Refresh before trying again.');
  if(['start','next','pause','resume','closeRound','end'].includes(op)&&body.phaseRevision!==undefined&&body.phaseRevision!==g.phase_revision)throw httpError(409,'The game status changed. Refresh before trying again.');
- if(['assessProject','roundReady','delegateMayor','checkNews','checkCampaign','shareCampaign','workTask'].includes(op)||(op==='helpTask'&&g.workshop_mode))return workshop.action(a,body);
- if(op==='resolveCouncil'){requireAdmin(a);return council.resolve(body.id,body.status);}
+ if(['assessProject','roundReady','delegateMayor','checkNews','checkCampaign','shareCampaign','workTask'].includes(op)||(op==='helpTask'&&g.workshop_mode)){const result=workshop.action(a,body);if(op==='roundReady')reviewIfReady();return result;}
+ if(op==='resolveCouncil'){requireAdmin(a);const result=council.resolve(body.id,body.status);reviewIfReady();return result;}
  if(op==='setReady'){const player=requirePlayer(a);if(g.phase==='ended')throw httpError(409,'This session has ended.');participantMonitor.setReady(player.id,body.ready);return {ok:true};}
  if(op==='acknowledgeReport'){const player=requirePlayer(a);if(g.phase!=='ended')throw httpError(409,'No final report yet.');lifecycle.acknowledge(player.id);return {ok:true};}
- if(g.council_approvals&&['invest','licenseAsset','chooseNews','unchooseNews','publish','approveProposal','rejectProposal'].includes(op))return council.handle(requirePlayer(a),body);
+ if(g.council_approvals&&['invest','licenseAsset','chooseNews','unchooseNews','publish','approveProposal','rejectProposal'].includes(op)){const result=council.handle(requirePlayer(a),body);reviewIfReady();return result;}
  if(op==='adjustVillage'){
   requireAdmin(a);if(g.phase!=='playing')throw httpError(409,'Resume the active round before intervening.');
   const metric=String(body.metric),limits={budget:250000,youth:100,internet:25,education:25,services:25,jobs:25,trust:25},delta=Number(body.delta);

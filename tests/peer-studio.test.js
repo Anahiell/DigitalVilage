@@ -24,7 +24,7 @@ test('peer decisions work with no mayor, prevent self approval/double spending, 
  const b=(await a.state()).villages[0].budget,proposal=await ok(a,'invest',{id:'fiber'},p[0]);assert.equal((await a.action('approveProposal',{id:proposal.proposalId},p[0].cookie)).status,403);
  const votes=await Promise.all([p[1],p[2]].map(p=>a.action('approveProposal',{id:proposal.proposalId},p.cookie)));assert.ok(votes.every(v=>v.status===200));assert.equal((await a.state()).villages[0].budget,b-29000);
  a.tick(60000);const school=await ok(a,'invest',{id:'school'},p[1]);assert.equal((await ok(a,'rejectProposal',{id:school.proposalId},p[2])).status,'pending');assert.equal((await ok(a,'approveProposal',{id:school.proposalId},p[3])).status,'pending');assert.equal((await ok(a,'approveProposal',{id:school.proposalId},p[4])).status,'approved');
- a.tick(60000);const stuck=await ok(a,'invest',{id:'center'},p[0]);await ok(a,'rejectProposal',{id:stuck.proposalId},p[1]);assert.equal((await a.action('resolveCouncil',{id:stuck.proposalId,status:'approved'},p[2].cookie)).status,403);await ok(a,'pause');assert.equal((await a.action('resolveCouncil',{id:stuck.proposalId,status:'approved'})).status,409);await ok(a,'resume');await ok(a,'resolveCouncil',{id:stuck.proposalId,status:'rejected'});assert.equal((await a.state()).builtInvestments.length,2);
+ a.tick(60000);const stuck=await ok(a,'invest',{id:'center'},p[0]);await ok(a,'rejectProposal',{id:stuck.proposalId},p[1]);for(const person of p)await ok(a,'roundReady',{ready:true},person);assert.equal((await a.action('resolveCouncil',{id:stuck.proposalId,status:'approved'},p[2].cookie)).status,403);await ok(a,'pause');assert.equal((await a.action('resolveCouncil',{id:stuck.proposalId,status:'approved'})).status,409);await ok(a,'resume');await ok(a,'resolveCouncil',{id:stuck.proposalId,status:'rejected'});assert.equal((await a.state()).builtInvestments.length,2);assert.equal((await a.state()).game.phase,'review');
 });
 test('poster layout is reviewed exactly; fictional paid contracts spend once and change the campaign assessment',async t=>{
  const a=await handlerFixture(t,{fakeClock:true}),p=await players(a);await ok(a,'start',{workshopMode:true,peerCouncil:true});await round(a,3);
@@ -38,7 +38,7 @@ test('poster layout is reviewed exactly; fictional paid contracts spend once and
 test('five bots without a mayor complete every round; useful actions are distributed across all five people',async t=>{
  const a=await handlerFixture(t,{fakeClock:true}),p=await players(a),results=[];await ok(a,'start',{workshopMode:true,peerCouncil:true});
  for(let r=1;r<=5;r++){
-  const start=p.map(b=>b.actions);
+  const start=p.map(b=>b.actions);let earlyCloseSeconds=null;
   for(let second=0;second<480;second+=10){
    if(r===1&&second===0)for(const person of p)await ok(a,'assessProject',{id:'fiber',note:'From '+person.role+': compare connectivity, employment and running costs against the remaining budget.'},person);
    if(r===1&&second%60===0&&second<=120){const n=second/60,x=await ok(a,'invest',{id:['fiber','school','center'][n]},p[n]);await ok(a,'approveProposal',{id:x.proposalId},p[(n+1)%5]);}
@@ -47,9 +47,9 @@ test('five bots without a mayor complete every round; useful actions are distrib
    if(r===4){let s=await a.state(p[0].cookie);for(const task of s.tasks.filter(t=>!t.assigned_to&&!t.done)){const owner=[...p].sort((a,b)=>a.actions-b.actions).find(b=>s.tasks.filter(t=>t.assigned_to===b.id&&!t.done).length<3);if(owner){await ok(a,'claimTask',{id:task.id},owner);s=await a.state(p[0].cookie);}}
     for(const task of s.tasks.filter(t=>t.assigned_to&&!t.done)){const owner=p.find(b=>b.id===task.assigned_to),helper=[...p].filter(b=>b!==owner).sort((a,b)=>a.actions-b.actions)[0];await ok(a,'workTask',{id:task.id},owner);if(!(await a.state(p[0].cookie)).tasks.find(t=>t.id===task.id).done)await ok(a,'helpTask',{id:task.id},helper);}}
    if(r===5&&second===0)for(const person of p)for(const q of SECURITY_QUESTIONS)await ok(a,'answerSecurity',{id:q.id,answer:q.correct},person);
-   a.tick(10000);
+   a.tick(10000);if(r===4){const tasks=(await a.state(p[0].cookie)).tasks;if(tasks.length===20&&tasks.every(t=>t.done)){earlyCloseSeconds=second+10;for(const person of p)await ok(a,'roundReady',{ready:true},person);break;}}
   }
-  const s=await a.state();assert.equal(s.game.phase,'review');results.push({round:r,actions:p.map((b,i)=>b.actions-start[i]),budget:s.villages[0].budget,youngResidents:s.villages[0].youth});if(r===4)assert.equal(s.tasks.filter(t=>t.done).length,20);if(r<5)await ok(a,'next');
+  const s=await a.state();assert.equal(s.game.phase,'review');results.push({round:r,earlyCloseSeconds,actions:p.map((b,i)=>b.actions-start[i]),budget:s.villages[0].budget,youngResidents:s.villages[0].youth});if(r===4)assert.equal(s.tasks.filter(t=>t.done).length,20);if(r<5)await ok(a,'next');
  }
  await ok(a,'end');assert.equal((await a.state(p[0].cookie)).finalReport.rounds.length,5);assert.equal((await a.state()).proposals.filter(p=>p.status==='pending').length,0);assert.ok(p.every(b=>b.actions>=15));console.log(JSON.stringify({scenario:'five-bots-no-mayor',players:5,totalActions:p.map(b=>({role:b.role,actions:b.actions})),rounds:results,allTickets:20,allReports:5}));
 });

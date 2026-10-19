@@ -10,6 +10,8 @@ Do not silently reduce the majority when someone disconnects: the host has expli
 
 The ordinary flow needs two people, rather than one specific mayor. Responsibility should rotate: a finance proposal can be reviewed by digital, digital by media, media by events, and events by a community advisor. Disputes are discussions, not automatic rejections. The original deputy mechanism remains only for older session formats.
 
+Once every participant marks their round work finished and no decisions are pending, peer sessions immediately save the round reports and enter review. The host still starts the next round. Lobby readiness never starts round one. This avoids waiting out the eight-minute cap after the team finishes.
+
 ## Development round
 
 Project cards show indicator changes, funds after purchase and the estimated ongoing budget effect. Per-minute net effect is six times the ten-second economy formula:

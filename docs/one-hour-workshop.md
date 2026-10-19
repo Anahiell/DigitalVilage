@@ -22,7 +22,7 @@ These are five eight-minute active rounds plus twenty minutes of host-led briefi
 
 ## Readiness and peer decisions
 
-Lobby readiness never starts round one. During a round, each participant marks **My round work is finished**. The host sees each team's count and pending proposals. **All teams ready — close round** only succeeds when every verified participant is ready and no pending council decisions remain. Manual round close remains available for absent participants or a hard deadline. New proposals and shared campaign drafts withdraw team readiness.
+Lobby readiness never starts round one. During a round, each participant marks **My round work is finished**. The host sees each team's count and pending proposals. **All teams ready — close round** only succeeds when every verified participant is ready and no pending council decisions remain. In new peer sessions, all-ready teams with no pending decisions instead enter the frozen report/review phase immediately; only the host opens the next round. Lobby readiness still never starts the game. Manual round close remains available for absent participants or a hard deadline. New proposals and shared campaign drafts withdraw team readiness.
 
 New sessions use [peer confirmation and majority discussion](peer-council-and-poster.md), so no mayor is required. Any other teammate can confirm a proposal; the host can explicitly resolve a stalled discussion.
 
