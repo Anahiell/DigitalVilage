@@ -25,6 +25,6 @@ test('Android starts with every ticket, shows real vector logos and reveals the 
  await a.action('closeRound');await a.action('next');await expect(p.locator('details[data-key=security-fallback]')).not.toHaveAttribute('open','');
  const exercise=(await a.state(cookie)).exerciseUrl;await p.goto(new URL(exercise,a.base).href);
  await expect(p.getByRole('heading',{name:'Oops, hello! This was phishing.'})).toBeVisible();
- assert.equal(await p.locator('input').count(),0);await p.screenshot({path:'test-results/clarity/android-reveal.png',fullPage:true});
+ await expect.poll(()=>a.db.prepare('SELECT COUNT(*) n FROM exercise_penalties').get().n).toBe(1);await p.reload();await expect(p.getByRole('heading',{name:'Oops, hello! This was phishing.'})).toBeVisible();assert.equal(a.db.prepare('SELECT COUNT(*) n FROM exercise_penalties').get().n,1);assert.equal(await p.locator('input').count(),0);await p.screenshot({path:'test-results/clarity/android-reveal.png',fullPage:true});
  assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);assert.deepEqual(errors,[]);
 });
