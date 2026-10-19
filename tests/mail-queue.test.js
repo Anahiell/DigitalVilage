@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test,{after} from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {mkdtemp,rm,readFile} from 'node:fs/promises';
@@ -10,7 +10,17 @@ const secret='persistent-mail-queue-secret-0123456789';
 const message={to:'test@example.invalid',subject:'PIN',body:'Your PIN is: 654321',kind:'pin'};
 const env={RESEND_API_KEY:'synthetic-key',EMAIL_FROM:'Village <village@example.invalid>'};
 
-async function temporary(t){const directory=await mkdtemp(join(tmpdir(),'dv-queue-'));t.after(()=>rm(directory,{recursive:true,force:true}));return join(directory,'world.db');}
+test('final report retries beyond the PIN retry window with a stable key and a seven-day deadline',async t=>{
+ const db=new DatabaseSync(':memory:');t.after(()=>db.close());let clock=0,sends=0;const keys=[];
+ const queue=createMailQueue({db,secret,now:()=>clock,maxAge:100,mailer:{config:{real:true,mode:'smtp'},async sendDetailed(job){keys.push(job.id);sends++;return sends<=8?{ok:false,retryable:true,code:'connection_failed',attempts:sends}:{ok:true,attempts:sends};}}});
+ t.after(()=>queue.close());const id=queue.enqueue({...message,kind:'report'});
+ assert.equal(db.prepare('SELECT expires_at FROM mail_jobs').get().expires_at,7*86400000);
+ for(let n=0;n<8;n++){await queue.drain();assert.equal(db.prepare('SELECT COUNT(*) AS n FROM mail_jobs').get().n,1);clock+=240001;}
+ await queue.drain();assert.equal(db.prepare('SELECT COUNT(*) AS n FROM mail_jobs').get().n,0);assert.equal(sends,9);assert.ok(keys.every(key=>key===id));
+});
+
+const directories=[];after(async()=>{for(const directory of directories)await rm(directory,{recursive:true,force:true,maxRetries:5,retryDelay:100});});
+async function temporary(t){const directory=await mkdtemp(join(tmpdir(),'dv-queue-'));directories.push(directory);return join(directory,'world.db');}
 
 test('encrypted mail survives reopening SQLite and retries with the same provider key exactly once after acceptance',async t=>{
  const path=await temporary(t),requests=[],logs=[];let clock=1000000;

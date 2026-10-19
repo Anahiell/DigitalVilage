@@ -7,7 +7,7 @@ import {spawnSync} from 'node:child_process';
 import {parseEnv} from 'node:util';
 import {DatabaseSync} from 'node:sqlite';
 
-test('Pi preparation preserves secrets, creates a consistent WAL backup and generates an explicit service unit',async t=>{
+test('Pi preparation preserves secrets, creates a consistent WAL backup and generates an explicit service unit',{skip:process.platform==='win32'?'Linux systemd paths and POSIX file permissions require Linux':false},async t=>{
  const temp=await mkdtemp(join(tmpdir(),'dv-deploy-'));t.after(()=>rm(temp,{recursive:true,force:true}));
  await mkdir(join(temp,'deploy'));await mkdir(join(temp,'storage'));
  for(const file of ['deploy/pi-config.mjs','deploy/backup.mjs','mailer.js','.env.example'])await copyFile(file,join(temp,file));
