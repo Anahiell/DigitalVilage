@@ -41,6 +41,7 @@ export function createSessionLifecycle({db,enqueue,now=Date.now}){
   // Report jobs have no player_id, so deleting accounts cannot cancel delivery.
   run("DELETE FROM mail_jobs WHERE kind<>'report'");
   run("DELETE FROM mail_deliveries WHERE kind<>'report'");
+  if(one("SELECT name FROM sqlite_master WHERE type='table' AND name='council_proposals'"))run('DELETE FROM council_proposals');
   for(const table of ['exercise_open_events','exercise_tracking','participant_ready','exercise_recipients','security_answers','round_reports','round_starts','crisis_losses','crisis_controls','news_choices','news_context','news_sources','news','posts','tasks','investments','snapshots','events','outbox'])run(`DELETE FROM ${table}`);
   run('DELETE FROM sessions WHERE admin=0');run('DELETE FROM players');
   run('UPDATE final_sessions SET reset_at=? WHERE id=? AND reset_at IS NULL',now(),expectedId);
