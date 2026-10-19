@@ -11,7 +11,7 @@ export function createSessionLifecycle({db,enqueue,now=Date.now}){
  const hash=value=>createHash('sha256').update(value).digest('hex');
  if(!one('SELECT 1 FROM session_lifecycle'))run('INSERT INTO session_lifecycle VALUES(1,?)',randomBytes(16).toString('hex'));
  const sessionId=()=>one('SELECT session_id FROM session_lifecycle').session_id;
- function finalize(){
+ function finalize({delayMs=0}={}){
   const id=sessionId();if(one('SELECT 1 FROM final_sessions WHERE id=?',id))return id;
   const rounds=db.prepare('SELECT data FROM round_reports ORDER BY round').all().map(r=>JSON.parse(r.data));
   const report={sessionId:id,closedAt:now(),rounds};
@@ -21,7 +21,8 @@ export function createSessionLifecycle({db,enqueue,now=Date.now}){
    run('INSERT INTO final_players VALUES(?,?,?,NULL)',id,p.id,JSON.stringify(personal));
    const token=randomBytes(32).toString('hex');run('INSERT INTO report_access VALUES(?,?,?)',hash(token),id,p.id);
    const summary=rounds.map(r=>{const v=r.villages.find(v=>v.id===p.village_id);return v?`Round ${r.round}: ${v.name}\n${v.story}\nCouncil: ${v.team.map(p=>`${p.name} (${p.position})`).join(', ')}\nResults: ${JSON.stringify(v.stats)}`:'';}).join('\n\n');
-   enqueue({to:p.email,subject:'Your final Digital Village report',body:`Hello ${p.name},\nRole: ${p.role}\n\n${summary}\n\nPrivate saved report: ${(process.env.PUBLIC_BASE_URL||'').replace(/\/$/,'')}/?report=${token}`,kind:'report'},{action:'report',sessionId:id});
+   const reportJob=enqueue({to:p.email,subject:'Your Digital Village certificate and final report',body:`Hello ${p.name},\nCertificate of participation: ${p.name}, ${p.role}.\nThank you for serving your village. Your honorary certificate and saved results are available at the private report link below.\nRole: ${p.role}\n\n${summary}\n\nPrivate saved report: ${(process.env.PUBLIC_BASE_URL||'').replace(/\/$/,'')}/?report=${token}`,kind:'report'},{action:'report',sessionId:id});
+   if(delayMs)run('UPDATE mail_jobs SET next_at=MAX(next_at,?) WHERE id=?',now()+delayMs,reportJob);
   }
   saveAccess();return id;
  }
@@ -42,7 +43,7 @@ export function createSessionLifecycle({db,enqueue,now=Date.now}){
   run("DELETE FROM mail_jobs WHERE kind<>'report'");
   run("DELETE FROM mail_deliveries WHERE kind<>'report'");
   if(one("SELECT name FROM sqlite_master WHERE type='table' AND name='council_proposals'"))run('DELETE FROM council_proposals');
-  for(const table of ['exercise_open_events','exercise_tracking','participant_ready','exercise_recipients','security_answers','round_reports','round_starts','crisis_losses','crisis_controls','news_choices','news_context','news_sources','news','posts','tasks','investments','snapshots','events','outbox'])run(`DELETE FROM ${table}`);
+  for(const table of ['task_bonus','exercise_penalties','project_notes','campaign_licences','council_votes','round_ready','acting_mayors','task_collaboration','news_checks','campaign_checks','campaign_drafts','exercise_open_events','exercise_tracking','participant_ready','exercise_recipients','security_answers','round_reports','round_starts','crisis_losses','crisis_controls','news_choices','news_context','news_sources','news','posts','tasks','investments','snapshots','events','outbox'])run(`DELETE FROM ${table}`);
   run('DELETE FROM sessions WHERE admin=0');run('DELETE FROM players');
   run('UPDATE final_sessions SET reset_at=? WHERE id=? AND reset_at IS NULL',now(),expectedId);
   run('UPDATE session_lifecycle SET session_id=?',randomBytes(16).toString('hex'));

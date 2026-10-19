@@ -78,7 +78,7 @@ test('real-mode registration, both sender tests and round-five exercise for ever
  await app.start({DEV_EMAIL_OUTBOX:'0',SMTP_EMAIL:primary,SMTP_APP_PASSWORD:'synthetic-pin-password',EXERCISE_SMTP_EMAIL:exercise,EXERCISE_SMTP_APP_PASSWORD:'synthetic-exercise-password',DV_SYNTHETIC_SMTP_MODE:'success',DV_SYNTHETIC_MAIL_CAPTURE:capture},true);
  const readMail=async()=>(await readFile(capture,'utf8')).trim().split('\n').map(JSON.parse);
  assert.equal((await app.request('/api/register',{name:'Consenting Participant',email:'consent@test.example',village:'green-valley',role:'mayor',consentEmail:true})).status,200);
- const registration=(await readMail())[0];assert.ok(registration.from.includes(primary));
+ const registration=(await readMail())[0];assert.equal(registration.from,`Digital Village <${primary}>`);
  assert.equal((await app.request('/api/login',{email:'consent@test.example',pin:registration.text.match(/PIN is: (\d{6})/)[1]})).status,200);
  const admin=(await app.request('/api/admin/login',{password:app.password})).cookie;
  const other=await app.request('/api/admin/enrol',{name:'No Email Exercise',email:'no-consent@test.example',village:'riverstone',role:'mayor',present:true,consentEmail:false},admin);
@@ -91,7 +91,7 @@ test('real-mode registration, both sender tests and round-five exercise for ever
  for(let n=0;n<4;n++)assert.equal((await app.request('/api/action',{op:'next'},admin)).status,200);
  await until(()=>db.prepare("SELECT COUNT(*) AS n FROM mail_deliveries WHERE kind='exercise' AND status='accepted'").get().n===2);
  const sent=await readMail();assert.equal(sent.length,5);
- const exercises=sent.slice(3);assert.ok(exercises.every(m=>m.from===`Digital Village <${exercise}>`));
+ const exercises=sent.slice(3);assert.ok(exercises.every(m=>m.from===`Digital City <${exercise}>`));
  assert.deepEqual(exercises.map(m=>m.to).sort(),['consent@test.example','no-consent@test.example']);
  assert.ok(exercises.every(m=>m.text.includes('/phishing')&&m.text.includes('No passwords will be requested')));
  const reveal=await app.request('/phishing');assert.equal(reveal.status,200);assert.match(reveal.data,/This was phishing/);

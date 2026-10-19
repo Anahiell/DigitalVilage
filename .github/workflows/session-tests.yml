@@ -23,6 +23,8 @@ jobs:
         run: node --test --test-concurrency=2 tests/*.test.js
       - name: HTTP load with 30 players
         run: npm run load-test
+      - name: One-hour workshop HTTP load at one-second polling
+        run: npm run load-test:hour
       - run: npx playwright install --with-deps chromium
       - name: Desktop and mobile browser flows
         run: node --test --test-concurrency=1 tests/*.e2e.mjs

@@ -6,7 +6,7 @@ import {chromium,devices,expect} from '@playwright/test';
 import {handlerFixture} from './handler-fixture.mjs';
 
 test('mobile council journey: briefing, stable polls, mayor approval, live metrics and vertical task board',{timeout:90000},async t=>{
- const browser=await chromium.launch();t.after(()=>browser.close());const a=await handlerFixture(t);
+ const browser=await chromium.launch();t.after(()=>browser.close());const a=await handlerFixture(t,{fakeClock:true});
  const errors=[];
  async function pageFor(cookie,options={}){const c=await browser.newContext(options);await c.route('**/*',async route=>{const r=route.request(),u=new URL(r.url());await route.fulfill(await a.handle(u.pathname+u.search,r.method(),r.postData()||'',r.headers()));});await c.addCookies([{name:'dv_session',value:cookie.split('=')[1],url:a.base}]);const p=await c.newPage();p.setDefaultTimeout(12000);p.on('pageerror',e=>errors.push(e.message));await p.goto(a.base);return p;}
  async function enrol(name,role){const email=role+'@ui.example.invalid',r=await a.request('/api/admin/enrol',{name,email,village:'green-valley',role,present:true},a.admin);return (await a.request('/api/login',{email,pin:r.data.pin})).cookie;}
@@ -16,11 +16,11 @@ test('mobile council journey: briefing, stable polls, mayor approval, live metri
  await expect(member.getByText('You are ready. Waiting for the host.',{exact:false})).toBeVisible();assert.equal((await a.state()).game.round,0);
  await host.locator('[data-view=admin]').first().click();await host.getByRole('button',{name:'▶ Start the game',exact:true}).click();
  await expect(member.locator('.round-mission')).toContainText('ROUND 1 OF 5');await expect(member.getByRole('button',{name:'Propose investment'}).first()).toBeEnabled();
- const before=(await a.state()).villages[0].budget;
- await member.locator('[data-action=invest][data-id=school]').click();await expect(member.locator('[data-action=invest][data-id=school]')).toHaveText('Awaiting mayor');
+ a.tick(60000);await expect(member.locator('[data-action=invest][data-id=school]')).toBeVisible();const before=(await a.state()).villages[0].budget;
+ await member.locator('[data-action=invest][data-id=school]').click();await expect(member.locator('[data-action=invest][data-id=school]')).toHaveText('Awaiting review');
  await expect(member.locator('[data-action=invest][data-id=school]')).toBeDisabled();
  assert.equal((await a.state()).builtInvestments.length,0);
- await mayor.locator('[data-view=council]').last().click();await expect(mayor.getByText(/Proposed by Mobile Events/)).toBeVisible();await mayor.getByRole('button',{name:'Approve and apply',exact:true}).click();
+ await mayor.locator('[data-view=council]').last().click();await expect(mayor.getByText(/Proposed by Mobile Events/)).toBeVisible();await mayor.getByRole('button',{name:'Support proposal',exact:true}).click();
  await expect(member.locator('[data-action=invest][data-id=school]')).toHaveText('Completed');assert.ok((await a.state()).villages[0].budget<before);
  // The grant input and details must remain the same nodes across real polls.
  if(!await host.locator('.host-setup').evaluate(e=>e.open))await host.locator('.host-setup > summary').click();await host.locator('#grant-form input').fill('12345');await host.locator('#grant-form input').focus();

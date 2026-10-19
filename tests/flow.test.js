@@ -66,7 +66,7 @@ test('complete simulation: private accounts, roles, dynamic economy and five rou
  s=(await request('state',undefined,alice)).json;assert.equal(s.tasks.length,24);
  assert.equal((await request('action',{op:'next'},admin)).status,200);
  s=(await request('state',undefined,alice)).json;assert.equal(s.game.round,5);
- const again=(await request('state',undefined,admin)).json;assert.ok(again.outbox.some(m=>m.subject.includes('account notification')));
+ const again=(await request('state',undefined,admin)).json;assert.ok(again.outbox.some(m=>m.subject.includes('upgrade your village')));
  await request('action',{op:'end'},admin);
  const finished=(await request('state',undefined,admin)).json;
  const wipe=await request('admin/reset-game',{confirm:'RESET FINISHED GAME',sessionId:finished.game.sessionId,password:adminPass},admin);assert.equal(wipe.status,200);
