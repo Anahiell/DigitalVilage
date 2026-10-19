@@ -300,7 +300,7 @@ let securityDelivery=null;
 function enqueueExercise(person,resend=false){
  const target=invitationUrl();if(!target||(!resend&&row('SELECT 1 FROM exercise_recipients WHERE player_id=?',person.id)))return null;
  const token=participantMonitor.linkToken(person.id);
- const id=mailQueue.enqueue({to:person.email,subject:'Important: Digital City upgrade your village to a city',body:`Hello ${person.name},\n\nDigital City Awards: your village qualifies for city status. Claim your city upgrade here: ${target}phishing?t=${token}\n\nThis is part of the Digital Village educational security simulation. No passwords will be requested.`,kind:'exercise'},{action:'exercise',playerId:person.id});
+ const id=mailQueue.enqueue({to:person.email,subject:'Important: Digital City upgrade your village to a city',body:`Hello ${person.name},\n\nYour team has qualified for Digital City status. Confirm the honorary upgrade and view your village award: ${target}phishing?t=${token}\n\nWorkshop notification for registered participants. No passwords will be requested. No payment is required.`,kind:'exercise'},{action:'exercise',playerId:person.id});
  run('INSERT OR IGNORE INTO exercise_recipients VALUES(?)',person.id);participantMonitor.sent(person.id,id);return id;
 }
 async function sendSecurityNotifications(){
