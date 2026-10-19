@@ -657,7 +657,7 @@ async function handler(req,res){try{
  }
  if(req.method!=='GET'&&req.method!=='HEAD')throw httpError(405,'Method not allowed');
  const file=path==='/phishing'?'phishing.html':path==='/'?'index.html':path.slice(1);
- if(!['index.html','phishing.html','phishing.js','app.js','poster-editor.js','poster-model.js','workshop-ui.js','report-ui.js','style.css','favicon.svg'].includes(file))throw httpError(404,'Not found');
+ if(!['index.html','phishing.html','phishing.js','app.js','poster-editor.js','poster-model.js','economy.js','workshop-ui.js','report-ui.js','style.css','favicon.svg'].includes(file))throw httpError(404,'Not found');
  const content=await readFile(join(ROOT,'public',file));res.writeHead(200,{'Content-Type':mime[extname(file)],'Cache-Control':file==='index.html'?'no-store':'public, max-age=120','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"});res.end(req.method==='HEAD'?undefined:content);
  }catch(e){const code=e.status||500;if(code>=500)console.error(e);if(e.retryAfter)res.setHeader('Retry-After',String(e.retryAfter));json(res,code,{error:e.status?e.message:'Server error',...(e.retryAfter?{retryAfter:e.retryAfter}:{})});}}
 if(getGame().phase==='ended')tx(()=>lifecycle.finalize());

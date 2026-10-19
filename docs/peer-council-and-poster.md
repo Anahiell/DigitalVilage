@@ -14,9 +14,9 @@ The ordinary flow needs two people, rather than one specific mayor. Responsibili
 
 Project cards show indicator changes, funds after purchase and the estimated ongoing budget effect. Per-minute net effect is six times the ten-second economy formula:
 
-`6 × (2.4 × jobs + 0.45 × trust − 0.92 × internet − 0.75 × education − 1.05 × services)`
+`6 × (1.95 × jobs + 0.45 × trust − 0.92 × internet − 0.75 × education − 1.05 × services)`
 
-The estimate deliberately excludes migration and random events. Each participant can record a role-specific recommendation on an available project. These notes are public to their village, do not spend funds and do not lock the project. This gives research and budget planning a visible contribution without creating another approval queue.
+The estimate includes the 0.45 running cost per job and indicator saturation at 100. It deliberately excludes migration and random events. Each participant can record a role-specific recommendation on an available project. These notes are public to their village, do not spend funds and do not lock the project. This gives research and budget planning a visible contribution without creating another approval queue.
 
 ## Concrete campaign assignment
 

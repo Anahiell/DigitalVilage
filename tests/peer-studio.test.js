@@ -2,9 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {handlerFixture} from './handler-fixture.mjs';
 import {MEDIA_ASSETS,SECURITY_QUESTIONS} from '../data.js';
+import {projectForecast} from '../public/economy.js';
+import {INVESTMENTS} from '../data.js';
 async function players(a){const people=[];for(const role of ['finance','digital','media','events','advisor-1']){const email=`peer-${role}@example.invalid`,r=await a.request('/api/admin/enrol',{name:role,email,village:'green-valley',role,present:true},a.admin);assert.equal(r.status,200);const cookie=(await a.request('/api/login',{email,pin:r.data.pin})).cookie;people.push({cookie,role,village:'green-valley',id:(await a.state(cookie)).me.id,actions:0});}return people;}
 async function ok(a,op,body={},p){if(op==='shareCampaign'&&body.baseDigest===undefined)body={...body,baseDigest:(await a.state(p.cookie)).workshop.campaignDrafts.find(d=>d.village_id===p.village)?.digest||''};const r=await a.action(op,body,p?.cookie);assert.equal(r.status,200,JSON.stringify({op,data:r.data}));if(p)p.actions++;return r.data;}
 async function round(a,n){while((await a.state()).game.round<n){await ok(a,'closeRound');await ok(a,'next');}}
+test('project running-cost forecast matches server ticks including job operating cost and saturated indicators',async t=>{
+ const a=await handlerFixture(t,{fakeClock:true}),p=await players(a);await ok(a,'start',{workshopMode:true,peerCouncil:true});a.db.prepare("UPDATE villages SET internet=98,jobs=98,trust=100 WHERE id='green-valley'").run();const initial=a.db.prepare("SELECT * FROM villages WHERE id='green-valley'").get();a.tick(1000);const baseline=a.db.prepare("SELECT budget FROM villages WHERE id='green-valley'").get().budget-initial.budget;
+ a.db.prepare("UPDATE villages SET budget=?,youth=?,internet=?,education=?,services=?,jobs=?,trust=? WHERE id='green-valley'").run(...['budget','youth','internet','education','services','jobs','trust'].map(k=>initial[k]));const proposal=await ok(a,'invest',{id:'fiber'},p[0]);await ok(a,'approveProposal',{id:proposal.proposalId},p[1]);const invested=a.db.prepare("SELECT budget FROM villages WHERE id='green-valley'").get().budget;a.tick(1000);const withProject=a.db.prepare("SELECT budget FROM villages WHERE id='green-valley'").get().budget-invested;
+ const forecast=projectForecast(initial,INVESTMENTS.find(i=>i.id==='fiber'));assert.deepEqual(forecast.effects,{internet:2,jobs:2,trust:0});assert.ok(Math.abs(forecast.netPerMinute-(withProject-baseline)*60)<.00001);
+});
 test('controlled campaign economy: free artwork, unlicensed branding and a paid workshop contract have different real outcomes',async t=>{
  for(const scenario of [{asset:'mountains',paid:false,budget:10650,trust:73},{asset:'nike',paid:false,budget:7500,trust:68},{asset:'nike',paid:true,budget:8250,trust:73}])await t.test(scenario.asset+(scenario.paid?' paid':' unpaid'),async t=>{
   const a=await handlerFixture(t,{fakeClock:true}),p=await players(a);await ok(a,'start',{workshopMode:true,peerCouncil:true});await round(a,3);a.db.prepare("UPDATE villages SET budget=10000,trust=72 WHERE id='green-valley'").run();
