@@ -7,7 +7,7 @@ async function enrol(a,i,role=ROLES[i%8].id,village=VILLAGES[Math.floor(i/8)].id
  const email=`hour-bot-${i}@example.invalid`,e=await a.request('/api/admin/enrol',{name:`Hour Bot ${i}`,email,role,village,present:true},a.admin);assert.equal(e.status,200,JSON.stringify(e.data));
  const login=await a.request('/api/login',{email,pin:e.data.pin});assert.equal(login.status,200);const s=await a.state(login.cookie);return {id:s.me.id,cookie:login.cookie,role,village};
 }
-async function ok(a,op,body={},bot){const r=await a.action(op,body,bot?.cookie);assert.equal(r.status,200,JSON.stringify({op,result:r.data}));return r.data;}
+async function ok(a,op,body={},bot){if(op==='shareCampaign'&&body.baseDigest===undefined)body={...body,baseDigest:(await a.state(bot.cookie)).workshop.campaignDrafts.find(d=>d.village_id===bot.village)?.digest||''};const r=await a.action(op,body,bot?.cookie);assert.equal(r.status,200,JSON.stringify({op,result:r.data}));return r.data;}
 async function reach(a,round){for(let i=(await a.state()).game.round;i<round;i++){await ok(a,'closeRound');await ok(a,'next');}}
 
 test('hour profile: one-second simulation, staged server releases, global pause, restart and team checkpoints',async t=>{

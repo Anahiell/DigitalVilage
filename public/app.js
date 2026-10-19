@@ -196,9 +196,9 @@ function render(force=false){
  for(const detail of app.querySelectorAll('details[data-key]'))if(ui.openDetails.has(detail.dataset.key))detail.open=ui.openDetails.get(detail.dataset.key);
  mountPoster();updateResend();
 }
-function mountPoster(){if(!state?.me)return;const p=state.posts.find(p=>p.village_id===state.me.village_id);mountEditor(app,{title:ui.draftTitle??p?.title??'',body:ui.draftBody??p?.body??'',credits:ui.draftCredits??p?.credits??'',village:currentVillage().name,assets:state.assets.filter(a=>(ui.selectedAssets??p?.assetIds??[]).includes(a.id)),layout:ui.posterLayout??p?.layout??{}},layout=>{ui.posterLayout=layout;ui.draftVersion??=p?.updated_at||0;savePosterDraft();},game().phase!=='playing'||game().round!==3||game().mediaRevealed);const shared=state.workshop?.campaignDrafts.find(d=>d.village_id===state.me.village_id);if(shared)paintPoster($id('shared-poster-preview'),{...shared.payload,village:currentVillage().name,assets:state.assets.filter(a=>shared.payload.assets.includes(a.id))});}
-function savePosterDraft(){if(!state?.me)return;try{localStorage.setItem('dv-studio:'+state.game.sessionId+':'+state.me.id,JSON.stringify({title:ui.draftTitle,body:ui.draftBody,credits:ui.draftCredits,assets:ui.selectedAssets,version:ui.draftVersion,layout:ui.posterLayout}));}catch{}}
-function restorePosterDraft(){if(!state?.me)return;const key='dv-studio:'+state.game.sessionId+':'+state.me.id;if(key===studioKey)return;studioKey=key;try{const d=JSON.parse(localStorage.getItem(key)||'null');if(!d)return;ui.draftTitle=typeof d.title==='string'?d.title.slice(0,100):null;ui.draftBody=typeof d.body==='string'?d.body.slice(0,1200):null;ui.draftCredits=typeof d.credits==='string'?d.credits.slice(0,300):null;ui.selectedAssets=Array.isArray(d.assets)?d.assets.filter(id=>state.assets.some(a=>a.id===id)).slice(0,5):null;ui.draftVersion=Number.isFinite(d.version)?d.version:null;ui.posterLayout=normaliseLayout(d.layout);}catch{}}
+function mountPoster(){if(!state?.me)return;const p=state.posts.find(p=>p.village_id===state.me.village_id);mountEditor(app,{title:ui.draftTitle??p?.title??'',body:ui.draftBody??p?.body??'',credits:ui.draftCredits??p?.credits??'',village:currentVillage().name,assets:state.assets.filter(a=>(ui.selectedAssets??p?.assetIds??[]).includes(a.id)),layout:ui.posterLayout??p?.layout??{}},layout=>{ui.sharedBase??=state.workshop?.campaignDrafts.find(d=>d.village_id===state.me.village_id)?.digest||'';ui.posterLayout=layout;ui.draftVersion??=p?.updated_at||0;savePosterDraft();},game().phase!=='playing'||game().round!==3||game().mediaRevealed);const shared=state.workshop?.campaignDrafts.find(d=>d.village_id===state.me.village_id);if(shared)paintPoster($id('shared-poster-preview'),{...shared.payload,village:currentVillage().name,assets:state.assets.filter(a=>shared.payload.assets.includes(a.id))});}
+function savePosterDraft(){if(!state?.me)return;try{localStorage.setItem('dv-studio:'+state.game.sessionId+':'+state.me.id,JSON.stringify({title:ui.draftTitle,body:ui.draftBody,credits:ui.draftCredits,assets:ui.selectedAssets,version:ui.draftVersion,layout:ui.posterLayout,baseDigest:ui.sharedBase}));}catch{}}
+function restorePosterDraft(){if(!state?.me)return;const key='dv-studio:'+state.game.sessionId+':'+state.me.id;if(key===studioKey)return;studioKey=key;try{const d=JSON.parse(localStorage.getItem(key)||'null');if(!d)return;ui.draftTitle=typeof d.title==='string'?d.title.slice(0,100):null;ui.draftBody=typeof d.body==='string'?d.body.slice(0,1200):null;ui.draftCredits=typeof d.credits==='string'?d.credits.slice(0,300):null;ui.selectedAssets=Array.isArray(d.assets)?d.assets.filter(id=>state.assets.some(a=>a.id===id)).slice(0,5):null;ui.draftVersion=Number.isFinite(d.version)?d.version:null;ui.posterLayout=normaliseLayout(d.layout);ui.sharedBase=typeof d.baseDigest==='string'?d.baseDigest:null;}catch{}}
 function setConnection(lost){
  const changed=connectionLost!==lost;connectionLost=lost;
  document.body.toggleAttribute('data-offline',lost);
@@ -233,7 +233,7 @@ async function refresh(force=false){
  }finally{pendingRefresh--;}
 }
 function cooldown(email,seconds){ui.resendUntil.set(email.trim().toLowerCase(),Date.now()+seconds*1000);updateResend();}
-function clearWorkspace(){studioKey=null;ui.taskFilter='focus';ui.openDetails.clear();ui.reportsCache.clear();ui.reportRound=null;ui.reportVillage=null;ui.selectedAssets=null;ui.draftTitle=null;ui.draftBody=null;ui.draftCredits=null;ui.draftVersion=null;ui.posterLayout=null;ui.postFeedback='';ui.auth.pin='';ui.authMessage='';}
+function clearWorkspace(){studioKey=null;ui.taskFilter='focus';ui.openDetails.clear();ui.reportsCache.clear();ui.reportRound=null;ui.reportVillage=null;ui.selectedAssets=null;ui.draftTitle=null;ui.draftBody=null;ui.draftCredits=null;ui.draftVersion=null;ui.posterLayout=null;ui.sharedBase=null;ui.postFeedback='';ui.auth.pin='';ui.authMessage='';}
 async function submitForm(form){
  const b=Object.fromEntries(new FormData(form));rememberAuth();
  if(form.id==='register-form'){
@@ -267,7 +267,7 @@ async function withBusy(button,work){
 async function action(el){
  if(ui.busy)return;const key=el.dataset.action;
  if(key==='openCityRecord'){const d=document.getElementById('city-record-'+el.dataset.id);if(d){d.open=true;d.scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth',block:'center'});}return;}
- if(key==='loadSharedCampaign'){const draft=state.workshop.campaignDrafts.find(d=>d.village_id===state.me.village_id);if(draft){ui.draftTitle=draft.payload.title;ui.draftBody=draft.payload.body;ui.draftCredits=draft.payload.credits;ui.selectedAssets=draft.payload.assets;ui.draftVersion=draft.payload.version;ui.posterLayout=draft.payload.layout||{};render(true);}return;}
+ if(key==='loadSharedCampaign'){const draft=state.workshop.campaignDrafts.find(d=>d.village_id===state.me.village_id);if(draft){ui.draftTitle=draft.payload.title;ui.draftBody=draft.payload.body;ui.draftCredits=draft.payload.credits;ui.selectedAssets=draft.payload.assets;ui.draftVersion=draft.payload.version;ui.posterLayout=draft.payload.layout||{};ui.sharedBase=draft.digest;savePosterDraft();render(true);}return;}
  if(key==='resolveCouncil'){await withBusy(el,async()=>{await api('action',{op:key,id:el.dataset.id,status:el.dataset.status});await refresh(true);});return;}
  if(['assessProject','roundReady','delegateMayor','restoreMayor','closeReadyRound','checkNews','checkCampaign','shareCampaign','workTask'].includes(key)){
   await withBusy(el,async()=>{
@@ -278,8 +278,8 @@ async function action(el){
    if(key==='closeReadyRound')body={op:'closeRound',onlyIfReady:true};
    if(key==='checkNews')body.note=el.closest('details').querySelector('textarea').value;
    if(key==='checkCampaign')body={op:key,version:Number(el.dataset.version),digest:el.dataset.digest,note:document.getElementById('campaign-check-note').value};
-   if(key==='shareCampaign'){const f=document.getElementById('post-form');if(!f.reportValidity())return;body={op:key,title:f.elements.title.value,body:f.elements.body.value,credits:f.elements.credits.value,layout:ui.posterLayout??state.posts.find(p=>p.village_id===state.me?.village_id)?.layout??{},assets:ui.selectedAssets??state.posts.find(p=>p.village_id===state.me.village_id)?.assetIds??[],version:ui.draftVersion??state.posts.find(p=>p.village_id===state.me.village_id)?.updated_at??0};}
-   const out=await api('action',body);notice(out.message||'Council updated');await refresh(true);
+   if(key==='shareCampaign'){const f=document.getElementById('post-form');if(!f.reportValidity())return;body={op:key,baseDigest:ui.sharedBase??state.workshop?.campaignDrafts.find(d=>d.village_id===state.me.village_id)?.digest??'',title:f.elements.title.value,body:f.elements.body.value,credits:f.elements.credits.value,layout:ui.posterLayout??state.posts.find(p=>p.village_id===state.me?.village_id)?.layout??{},assets:ui.selectedAssets??state.posts.find(p=>p.village_id===state.me.village_id)?.assetIds??[],version:ui.draftVersion??state.posts.find(p=>p.village_id===state.me.village_id)?.updated_at??0};}
+   const out=await api('action',body);if(key==='shareCampaign'){ui.sharedBase=out.digest;savePosterDraft();}notice(out.message||'Council updated');await refresh(true);
   });return;
  }
  if(key==='set-ready'){await withBusy(el,async()=>{await api('action',{op:'setReady',ready:!state.ready});notice('Readiness saved. Only the host starts round one.');await refresh(true);});return;}
@@ -321,8 +321,8 @@ async function action(el){
   if(!confirm('Issue a new temporary PIN for this player? Their previous PIN will stop working.'))return;
   await withBusy(el,async()=>{const out=await api('admin/issue-pin',{playerId:el.dataset.id});showPrivatePin(out);notice('Emergency PIN generated');});return;
  }
- if(key==='reload-campaign'){if(!confirm('Replace your local draft with the latest published campaign? Copy any text you want to keep first.'))return;ui.draftTitle=null;ui.draftBody=null;ui.draftCredits=null;ui.draftVersion=null;ui.posterLayout=null;ui.selectedAssets=null;ui.postFeedback='';await refresh(true);return;}
- if(key==='asset'){
+ if(key==='reload-campaign'){if(!confirm('Replace your local draft with the latest published campaign? Copy any text you want to keep first.'))return;ui.draftTitle=null;ui.draftBody=null;ui.draftCredits=null;ui.draftVersion=null;ui.posterLayout=null;ui.sharedBase=null;ui.selectedAssets=null;ui.postFeedback='';await refresh(true);return;}
+ if(key==='asset'){ui.sharedBase??=state.workshop?.campaignDrafts.find(d=>d.village_id===state.me?.village_id)?.digest||'';
   ui.draftVersion??=state.posts.find(p=>p.village_id===state.me?.village_id)?.updated_at||0;
   const id=el.dataset.id,old=ui.selectedAssets??[...(state.posts.find(p=>p.village_id===state.me?.village_id)?.assetIds||[])];
   ui.selectedAssets=old.includes(id)?old.filter(x=>x!==id):old.length<5?[...old,id]:old;savePosterDraft();render(true);return;
@@ -366,7 +366,7 @@ document.addEventListener('input',e=>{
  if(e.target.closest('#register-form, #login-form')){rememberAuth();if(e.target.name==='email'){authFeedback('');updateResend();}}
  if(e.target.closest('#grant-form')&&e.target.name==='amount')ui.adminGrantAmount=e.target.value;
  if(e.target.closest('#post-form')){
-  const f=e.target.closest('form');ui.draftVersion??=state.posts.find(p=>p.village_id===state.me?.village_id)?.updated_at||0;ui.draftTitle=f.elements.title.value;ui.draftBody=f.elements.body.value;ui.draftCredits=f.elements.credits?.value||'';
+  ui.sharedBase??=state.workshop?.campaignDrafts.find(d=>d.village_id===state.me?.village_id)?.digest||'';const f=e.target.closest('form');ui.draftVersion??=state.posts.find(p=>p.village_id===state.me?.village_id)?.updated_at||0;ui.draftTitle=f.elements.title.value;ui.draftBody=f.elements.body.value;ui.draftCredits=f.elements.credits?.value||'';
   const title=$id('preview-title'),body=$id('preview-body');if(title)title.textContent=f.elements.title.value||'Your village is waiting';if(body)body.textContent=(f.elements.body.value||'Your incredible adventure starts here.').slice(0,180);const credits=$id('preview-credits');if(credits)credits.textContent=f.elements.credits?.value||'';mountPoster();savePosterDraft();
  }
 });

@@ -28,7 +28,7 @@ For five people, assign writer, designer, city fact checker, asset-rights checke
 
 The native Canvas editor supports finger dragging with pointer capture, a layer selector, arrow-key/button movement, text/asset scale, four colour themes, portrait/square/landscape formats, layout reset and PNG download. Text controls remain standard Android inputs. Movement is bounded, overlapping text produces a warning, and colour backplates protect text contrast. Keyboard/buttons are alternatives to dragging. Only the canvas consumes the drag gesture; scroll elsewhere on the page.
 
-Draft text, selected assets, published version and layout are saved locally under the participant/session key; passwords and PINs are never stored there. Reloading restores the draft. Shared previews render the actual saved layout, and publishing persists that layout in SQLite and final report data. A new server publication with different content still requires loading/reviewing that version rather than silently overwriting it.
+Draft text, selected assets, published version and layout are saved locally under the participant/session key; passwords and PINs are never stored there. Reloading restores the draft. Shared drafts use a digest lease: a teammate cannot overwrite a changed draft from an older local copy. Local work is retained on conflict. Shared previews render the actual saved layout, and publishing persists that layout in SQLite and final report data. A new server publication with different content still requires loading/reviewing that version rather than silently overwriting it.
 
 ## Brand scenarios and costs
 
