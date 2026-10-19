@@ -28,7 +28,7 @@ export function updateScreen(root,html){
   let cursor=parent.firstChild;
   for(const desired of [...next.childNodes]){
    let match=cursor&&same(cursor,desired)?cursor:null;
-   if(!match&&key(desired))match=[...parent.childNodes].find(n=>same(n,desired));
+   if(!match)for(let candidate=cursor;candidate;candidate=candidate.nextSibling)if(same(candidate,desired)){match=candidate;break;}
    if(match){if(match!==cursor)parent.insertBefore(match,cursor);patch(match,desired);cursor=match.nextSibling;}
    else {parent.insertBefore(desired.cloneNode(true),cursor);}
   }
