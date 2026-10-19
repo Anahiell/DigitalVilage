@@ -27,7 +27,7 @@ export function createMailer({env=process.env,record=()=>{},writeOutbox=()=>{},r
    return data.id;
   }
   const client=await smtpTransport();
-  const result=await client.sendMail({from:`Digital Village <${env.SMTP_EMAIL}>`,to:job.to,subject:job.subject,text:job.body,messageId:`<${job.id}@digital-village.local>`});
+  const result=await client.sendMail({from:`${job.kind==='exercise'?'Digital City':'Digital Village'} <${env.SMTP_EMAIL}>`,to:job.to,subject:job.subject,text:job.body,messageId:`<${job.id}@digital-village.local>`});
   if(!result.accepted?.some(address=>String(address).toLowerCase()===job.to.toLowerCase()))throw Object.assign(Error('The recipient was not accepted.'),{code:'recipient_rejected'});
   return result.messageId||job.id;
  }

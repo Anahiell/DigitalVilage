@@ -84,3 +84,5 @@ Round five sends each participant a personal opaque exercise link. A visible rev
 Each row shows the latest exercise delivery status, error code and request count. **Resend exercise** enqueues a new email for that participant while round five is playing, paused or in review. It preserves the personal link and earlier opens, rejects requests while a previous job is pending, and enforces a 90-second per-person cooldown. Provider acceptance does not prove inbox delivery. A server restart retains tracking/readiness and queued requests. Reset clears these session-specific records and invalidates old tracking links; saved final reports remain unchanged.
 
 Checks: `npm run test:monitor` runs a real-handler/SQLite integration rehearsal for 30 participants in process, with no listening socket or real email. `npm run test:e2e` includes Chromium checks for the participant tab, readiness, personal-link opens and resend controls.
+
+One-hour format: [host agenda and cooperative rules](docs/one-hour-workshop.md).

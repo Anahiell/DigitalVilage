@@ -19,7 +19,10 @@ export const INVESTMENTS=[
  {id:'school',name:'Digital skills academy',icon:'🎓',price:19000,effects:{education:32,jobs:5,trust:2},description:'Learning and employment opportunities for young people.'},
  {id:'center',name:'Community health hub',icon:'🏥',price:24000,effects:{services:32,trust:5},description:'Accessible services and a safer public space.'},
  {id:'startup',name:'Startup incubator',icon:'💻',price:26000,effects:{jobs:31,education:7},description:'Local innovation with higher ongoing operating costs.'},
- {id:'solar',name:'Community solar project',icon:'☀️',price:17500,effects:{services:8,jobs:8,trust:3},description:'Energy resilience for the local community.'}
+ {id:'solar',name:'Community solar project',icon:'☀️',price:17500,effects:{services:8,jobs:8,trust:3},description:'Energy resilience for the local community.'},
+ {id:'garden',name:'Community food garden',icon:'🌱',price:6500,effects:{services:5,trust:3},description:'Residents grow food and share skills.'},
+ {id:'bus',name:'Youth shuttle service',icon:'🚌',price:8500,effects:{services:8,jobs:3},description:'Connect young people with school and work.'},
+ {id:'library',name:'Open learning library',icon:'📚',price:7500,effects:{education:8,internet:3},description:'Shared devices and accessible learning spaces.'}
 ];
 export const ROUNDS=[
  {id:1,name:'Build Your Village',kicker:'DECISIONS SHAPE THE FUTURE',description:'Invest in essential services, keep the budget afloat and persuade young people to stay.',duration:1200},

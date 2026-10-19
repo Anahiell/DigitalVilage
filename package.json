@@ -18,7 +18,8 @@
     "test:monitor": "node --test tests/participant-monitor.test.js",
     "test:session": "node --test tests/global-pause.test.js tests/session-load.test.js",
     "test:e2e:session": "node --test tests/session-controls.e2e.mjs",
-    "load-test:handler": "node --test tests/session-load.test.js"
+    "load-test:handler": "node --test tests/session-load.test.js",
+    "load-test:hour": "node tests/hour-load.mjs"
   },
   "dependencies": {
     "nodemailer": "^10.1.2",

@@ -1,16 +1,16 @@
 import {randomUUID} from 'node:crypto';
 
 // Only the server calls this module. A player cannot supply an approval bypass.
-export function createCouncil({db,getGame,sessionId,investments,assets,now,log,baseline,error}){
+export function createCouncil({db,getGame,sessionId,investments,assets,now,log,baseline,error,canApprove=player=>player.role==='mayor',beforeDecision=()=>{}}){
  db.exec(`CREATE TABLE IF NOT EXISTS council_proposals(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,village_id TEXT NOT NULL,round INTEGER NOT NULL,op TEXT NOT NULL,resource TEXT NOT NULL,payload TEXT NOT NULL,author_id TEXT NOT NULL,author_name TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',created_at INTEGER NOT NULL,reviewer TEXT NOT NULL DEFAULT '',reviewed_at INTEGER NOT NULL DEFAULT 0);
  CREATE UNIQUE INDEX IF NOT EXISTS council_pending_resource ON council_proposals(session_id,village_id,resource) WHERE status='pending';`);
  const one=(s,...a)=>db.prepare(s).get(...a),run=(s,...a)=>db.prepare(s).run(...a);
  const transaction=fn=>{db.exec('BEGIN IMMEDIATE');try{const value=fn();db.exec('COMMIT');return value;}catch(e){db.exec('ROLLBACK');throw e;}};
  const fail=(s,m)=>{throw error(s,m);};
  function expire(){const g=getGame();run("UPDATE council_proposals SET status='expired',reviewed_at=? WHERE status='pending' AND (session_id<>? OR round<>? OR ? IN ('review','ended'))",now(),sessionId(),g.round,g.phase);}
- function check(player,b,g){
+ function check(player,b,g,approving=false){
   if(g.phase!=='playing')fail(409,'The round is not running. The host must resume or open it.');
-  const op=b.op;
+  const op=b.op;beforeDecision(player,b,approving);
   if(op==='invest'){
    if(g.round!==1)fail(409,'Investments belong to round one.');
    const item=investments.find(i=>i.id===b.id);if(!item)fail(400,'Unknown investment.');
@@ -48,11 +48,11 @@ export function createCouncil({db,getGame,sessionId,investments,assets,now,log,b
  function handle(player,b){expire();return transaction(()=>{
   const g=getGame();
   if(['approveProposal','rejectProposal'].includes(b.op)){
-   if(player.role!=='mayor')fail(403,'Only your village mayor can approve or reject proposals.');
+   if(!canApprove(player))fail(403,'Only your village mayor can approve or reject proposals.');
    const proposal=one('SELECT * FROM council_proposals WHERE id=? AND session_id=? AND village_id=?',String(b.id||''),sessionId(),player.village_id);if(!proposal)fail(404,'Proposal not found in your village.');
    if(proposal.status!=='pending')return {ok:true,status:proposal.status,proposalId:proposal.id,message:'This proposal was already '+proposal.status+'.'};
    if(g.phase!=='playing'||g.round!==proposal.round)fail(409,'Wait for the host to resume. Closed-round proposals cannot be applied.');
-   if(b.op==='approveProposal'){const prepared=check(player,JSON.parse(proposal.payload),g);if(!prepared.already)apply(player,prepared);}
+   if(b.op==='approveProposal'){const prepared=check(player,JSON.parse(proposal.payload),g,true);if(!prepared.already)apply(player,prepared);}
    const status=b.op==='approveProposal'?'approved':'rejected';run('UPDATE council_proposals SET status=?,reviewer=?,reviewed_at=? WHERE id=?',status,player.name,now(),proposal.id);
    log(g.round,player.village_id,'council',`Council proposal ${status}`,`${player.name} ${status} ${proposal.op} proposed by ${proposal.author_name}.`);
    return {ok:true,status,proposalId:proposal.id,message:status==='approved'?'Approved and applied to your village.':'Proposal rejected. No village resources were changed.'};
@@ -62,6 +62,7 @@ export function createCouncil({db,getGame,sessionId,investments,assets,now,log,b
   if(previous){const payload=JSON.parse(previous.payload);if(payload.op!==p.op||p.op==='publish'&&JSON.stringify(payload)!==JSON.stringify(Object.fromEntries(Object.entries(p).filter(([k])=>!['resource','item'].includes(k)))))fail(409,'A different proposal for this item is waiting for the mayor. Review it first.');return {ok:true,status:'pending',proposalId:previous.id,message:'Already awaiting your mayor’s approval. No duplicate action was created.'};}
   const payload=Object.fromEntries(Object.entries(p).filter(([k])=>!['resource','item'].includes(k))),id=randomUUID();
   run('INSERT INTO council_proposals(id,session_id,village_id,round,op,resource,payload,author_id,author_name,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)',id,sessionId(),player.village_id,g.round,p.op,p.resource,JSON.stringify(payload),player.id,player.name,now());
+  run('DELETE FROM round_ready WHERE player_id IN (SELECT id FROM players WHERE village_id=?)',player.village_id);
   return {ok:true,status:'pending',proposalId:id,message:'Sent to your mayor. Your village changes only after approval.'};
  });}
  function list(player,admin=false){expire();return db.prepare('SELECT * FROM council_proposals WHERE session_id=?'+(admin?'':' AND village_id=?')+' ORDER BY created_at DESC LIMIT 100').all(...(admin?[sessionId()]:[sessionId(),player.village_id])).map(p=>({...p,payload:JSON.parse(p.payload)}));}
