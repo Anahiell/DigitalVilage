@@ -69,3 +69,14 @@ The optional `Dockerfile` also supports a single persistent container: mount `/d
 
 
 SMTP setup and launch: [Russian quick start](deploy/SMTP_START_RU.md). Browser checks: `npm run test:e2e` after `npx playwright install chromium`. Load rehearsal: `npm run load-test` (30 players, including final reports and reset).
+
+
+## Participant readiness and exercise monitoring
+
+The host-only **Participants** tab lists names, account emails, villages and roles, current sign-in sessions, online presence (seen within 35 seconds), and participant-confirmed readiness. Players toggle **I’m ready** on Overview. Readiness and online presence are separate: closing a page does not automatically revoke readiness, and a signed-in browser may be offline.
+
+Round five sends each participant a personal opaque exercise link. A visible reveal page reports its first/last open and total page opens to the host. Merely fetching the HTML does not mark an open. These are page-open signals, not proof that a human clicked: email security scanners can sometimes execute pages too. IP addresses and device details are not stored with these signals. Existing unpersonalised links remain usable but cannot identify a participant.
+
+Each row shows the latest exercise delivery status, error code and request count. **Resend exercise** enqueues a new email for that participant while round five is playing, paused or in review. It preserves the personal link and earlier opens, rejects requests while a previous job is pending, and enforces a 90-second per-person cooldown. Provider acceptance does not prove inbox delivery. A server restart retains tracking/readiness and queued requests. Reset clears these session-specific records and invalidates old tracking links; saved final reports remain unchanged.
+
+Checks: `npm run test:monitor` runs a real-handler/SQLite integration rehearsal for 30 participants in process, with no listening socket or real email. `npm run test:e2e` includes Chromium checks for the participant tab, readiness, personal-link opens and resend controls.

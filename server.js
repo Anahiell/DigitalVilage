@@ -8,6 +8,7 @@ import {VILLAGES,ROLES,INVESTMENTS,ROUNDS,MEDIA_ASSETS,FESTIVAL_TASKS,SECURITY_Q
 import {createWorkshopMailer,mailConfiguration} from './mailer.js';
 import {createMailQueue} from './mail-queue.js';
 import {createSessionLifecycle} from './session-lifecycle.js';
+import {createParticipantMonitor} from './participant-monitor.js';
 import {generateNews,buildRoundReport,campaignReview,buildWorkshopStories} from './game-content.js';
 const ROOT=process.cwd(), HOST=process.env.HOST||'127.0.0.1',PORT=Number(process.env.PORT||3000);
 const ADMIN_PASSWORD=process.env.ADMIN_PASSWORD||'', PIN_PEPPER=process.env.PIN_PEPPER||'';
@@ -255,6 +256,7 @@ db.exec('CREATE TRIGGER IF NOT EXISTS clear_player_mail_jobs AFTER DELETE ON pla
 run("UPDATE mail_deliveries SET status=CASE WHEN id IN (SELECT id FROM mail_jobs) THEN 'queued' ELSE 'interrupted' END,error_code='server_restart',updated_at=? WHERE status='sending'",at());
 async function sendEmail(to,subject,body,kind='test',context={}){return mailQueue.wait(mailQueue.enqueue({to,subject,body,kind},context));}
 const lifecycle=createSessionLifecycle({db,enqueue:(message,context)=>mailQueue.enqueue(message,context)});
+const participantMonitor=createParticipantMonitor({db,secret:PIN_PEPPER,sessionId:lifecycle.sessionId});
 
 
 function newPin(id){mailQueue.cancelPlayer(id);const {pin,fingerprint}=generatePin();run('UPDATE players SET pin_hash=?,pin_lookup=?,attempts=0,locked_until=0,pin_sent_at=? WHERE id=?',hashPin(pin),fingerprint,at(),id);return pin;}
@@ -279,15 +281,16 @@ function invitationUrl(){
  try{const url=new URL(process.env.PUBLIC_BASE_URL);if(!['http:','https:'].includes(url.protocol)||url.username||url.password)return '';return url.origin+'/';}catch{return '';}
 }
 let securityDelivery=null;
-function enqueueExercise(person){
- const target=invitationUrl();if(!target||row('SELECT 1 FROM exercise_recipients WHERE player_id=?',person.id))return null;
- const id=mailQueue.enqueue({to:person.email,subject:'Important: Digital Village account notification',body:`Hello ${person.name},\n\nA new security message is waiting for you. Review it here: ${target}phishing\n\nThis is part of the Digital Village educational security simulation. No passwords will be requested.`,kind:'exercise'},{action:'exercise',playerId:person.id});
- run('INSERT INTO exercise_recipients VALUES(?)',person.id);return id;
+function enqueueExercise(person,resend=false){
+ const target=invitationUrl();if(!target||(!resend&&row('SELECT 1 FROM exercise_recipients WHERE player_id=?',person.id)))return null;
+ const token=participantMonitor.linkToken(person.id);
+ const id=mailQueue.enqueue({to:person.email,subject:'Important: Digital Village account notification',body:`Hello ${person.name},\n\nA new security message is waiting for you. Review it here: ${target}phishing?t=${token}\n\nThis is part of the Digital Village educational security simulation. No passwords will be requested.`,kind:'exercise'},{action:'exercise',playerId:person.id});
+ run('INSERT OR IGNORE INTO exercise_recipients VALUES(?)',person.id);participantMonitor.sent(person.id,id);return id;
 }
 async function sendSecurityNotifications(){
  if(!invitationUrl()){logEvent(5,null,'mail','Security exercise emails not sent','Set PUBLIC_BASE_URL and restart to retry.');return;}
  const people=all('SELECT id,name,email FROM players');
- const jobs=tx(()=>{const pending=people.map(enqueueExercise).filter(Boolean);run('UPDATE game SET security_sent=1 WHERE id=1');return pending;});
+ const jobs=tx(()=>{const pending=people.map(person=>enqueueExercise(person)).filter(Boolean);run('UPDATE game SET security_sent=1 WHERE id=1');return pending;});
  for(let i=0;i<people.length;i+=3){
   await Promise.all(jobs.slice(i,i+3).map(id=>mailQueue.wait(id)));
  }
@@ -349,8 +352,8 @@ function currentState(a,knownHistory=0,tokenHash=''){advanceWorld();const g=getG
  }
  if(g.phase==='ended')base.workshopStories=buildWorkshopStories(all('SELECT data FROM round_reports ORDER BY round').map(r=>JSON.parse(r.data)));
  if(person)base.helpCooldowns=Object.fromEntries(all("SELECT details,MAX(at) AS at FROM events WHERE kind='help' AND details LIKE ? AND at>? GROUP BY details",person.id+':%',at()-60000).map(e=>[e.details.slice(person.id.length+1),e.at+60000]));
- if(person)base.me=person;
- if(a.admin){base.admin=true;base.invitationUrl=invitationUrl();base.emailMode=mailSettings.mode;base.mailConfiguration={mode:mailSettings.mode,real:mailSettings.real,configured:mailSettings.configured,issues:mailSettings.issues,exercise:{...mailer.exerciseConfig,separate:mailer.exerciseSeparate,requested:mailer.exerciseRequested}};base.mailDeliveries=all("SELECT d.email,d.kind,d.status,d.provider,COALESCE(r.provider_id,'') AS provider_id,d.attempts,d.error_code,d.updated_at FROM mail_deliveries d LEFT JOIN mail_provider_refs r ON r.delivery_id=d.id ORDER BY d.updated_at DESC LIMIT 12");base.mailQueue={pending:row('SELECT COUNT(*) AS n FROM mail_jobs').n,active:mailQueue.active};base.outbox=DEV_MAIL?all('SELECT id,email,subject,body,at FROM outbox ORDER BY id DESC LIMIT 50'):[];base.stats={registered:base.people.length,verified:base.people.filter(p=>p.verified).length,active:base.people.filter(p=>p.last_seen>at()-35000).length};}
+ if(person){base.me=person;base.ready=participantMonitor.isReady(person.id);if(g.round===5)base.exerciseUrl='/phishing?t='+participantMonitor.linkToken(person.id);}
+ if(a.admin){base.participants=participantMonitor.participants();base.admin=true;base.invitationUrl=invitationUrl();base.emailMode=mailSettings.mode;base.mailConfiguration={mode:mailSettings.mode,real:mailSettings.real,configured:mailSettings.configured,issues:mailSettings.issues,exercise:{...mailer.exerciseConfig,separate:mailer.exerciseSeparate,requested:mailer.exerciseRequested}};base.mailDeliveries=all("SELECT d.email,d.kind,d.status,d.provider,COALESCE(r.provider_id,'') AS provider_id,d.attempts,d.error_code,d.updated_at FROM mail_deliveries d LEFT JOIN mail_provider_refs r ON r.delivery_id=d.id ORDER BY d.updated_at DESC LIMIT 12");base.mailQueue={pending:row('SELECT COUNT(*) AS n FROM mail_jobs').n,active:mailQueue.active};base.outbox=DEV_MAIL?all('SELECT id,email,subject,body,at FROM outbox ORDER BY id DESC LIMIT 50'):[];base.stats={registered:base.people.length,verified:base.people.filter(p=>p.verified).length,active:base.people.filter(p=>p.last_seen>at()-35000).length};}
  return base;
 }
 function canInvest(p){return ['mayor','finance','digital'].includes(p.role);}
@@ -376,6 +379,7 @@ function resolveFestival(){const g=getGame();if(g.festival_resolved)return;
 }
 async function doAction(a,body){advanceWorld();const op=clean(body.op),g=getGame(),p=a?.player;
  if(body.sessionId&&body.sessionId!==lifecycle.sessionId())throw httpError(409,'The session has changed. Refresh before trying again.');
+ if(op==='setReady'){const player=requirePlayer(a);if(g.phase==='ended')throw httpError(409,'This session has ended.');participantMonitor.setReady(player.id,body.ready);return {ok:true};}
  if(op==='acknowledgeReport'){const player=requirePlayer(a);if(g.phase!=='ended')throw httpError(409,'No final report yet.');lifecycle.acknowledge(player.id);return {ok:true};}
  if(['pauseCrisis','resumeCrisis','cancelCrisis'].includes(op)){
   requireAdmin(a);if(!['playing','paused'].includes(g.phase)||![1,4].includes(g.round))throw httpError(409,'No open crisis in this round.');
@@ -531,6 +535,20 @@ async function handler(req,res){try{
   if(req.method!=='POST')throw httpError(405,'Method not allowed');
   const origin=req.headers.origin;if(origin){const o=new URL(origin);const expected=(process.env.PUBLIC_BASE_URL?new URL(process.env.PUBLIC_BASE_URL).host:req.headers.host);if(o.host!==expected)throw httpError(403,'Invalid request origin');}
   const b=await bodyJson(req);a=auth(req);
+  if(path==='/api/exercise/open'){
+   throttle(req,'exercise-open',300,60000);
+   const tracked=tx(()=>participantMonitor.opened(b.token,b.eventId));return json(res,200,{ok:true,tracked});
+  }
+  if(path==='/api/admin/resend-exercise'){
+   requireAdmin(a);throttle(req,'exercise-resend',90,900000);
+   if(getGame().round!==5||!['playing','paused','review'].includes(getGame().phase))throw httpError(409,'Exercise resend is available while round five is open or in review.');
+   if(b.sessionId!==lifecycle.sessionId())throw httpError(409,'This session has changed. Refresh first.');
+   if(!invitationUrl())throw httpError(503,'Configure PUBLIC_BASE_URL before sending exercise emails.');
+   const player=row('SELECT id,name,email FROM players WHERE id=?',clean(b.playerId));if(!player)throw httpError(404,'Participant not found.');
+   const id=tx(()=>{participantMonitor.canResend(player.id);return enqueueExercise(player,true);});
+   // Return after durable enqueue; the existing worker performs delivery and retries.
+   return json(res,202,{ok:true,queued:true,jobId:id,message:'Exercise email saved for delivery.'});
+  }
   if(path==='/api/register'){throttle(req,'register',80,3600000);const result=await register(b);return json(res,result.queued?202:200,result);}
   if(path==='/api/login'){throttle(req,'login',300,900000);return json(res,200,login(b.email,b.pin,res,req));}
   if(path==='/api/admin/login'){
@@ -585,7 +603,7 @@ async function handler(req,res){try{
  }
  if(req.method!=='GET'&&req.method!=='HEAD')throw httpError(405,'Method not allowed');
  const file=path==='/phishing'?'phishing.html':path==='/'?'index.html':path.slice(1);
- if(!['index.html','phishing.html','app.js','report-ui.js','style.css','favicon.svg'].includes(file))throw httpError(404,'Not found');
+ if(!['index.html','phishing.html','phishing.js','app.js','report-ui.js','style.css','favicon.svg'].includes(file))throw httpError(404,'Not found');
  const content=await readFile(join(ROOT,'public',file));res.writeHead(200,{'Content-Type':mime[extname(file)],'Cache-Control':file==='index.html'?'no-store':'public, max-age=120','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"});res.end(req.method==='HEAD'?undefined:content);
  }catch(e){const code=e.status||500;if(code>=500)console.error(e);if(e.retryAfter)res.setHeader('Retry-After',String(e.retryAfter));json(res,code,{error:e.status?e.message:'Server error',...(e.retryAfter?{retryAfter:e.retryAfter}:{})});}}
 if(getGame().phase==='ended')tx(()=>lifecycle.finalize());
@@ -604,4 +622,4 @@ const mailClock=process.env.NODE_ENV==='test'?null:setInterval(()=>void mailQueu
 mailClock?.unref();
 server.on('close',()=>{clearInterval(worldClock);clearInterval(mailClock);mailQueue.close();});
 if(process.env.NODE_ENV!=='test')server.listen(PORT,HOST,()=>console.log(`Digital Village listening at http://${HOST}:${PORT}; dev email outbox: ${DEV_MAIL?'on':'off'}`));
-export {handler,server,db,advanceWorld};
+export {handler,server,db,advanceWorld,mailQueue};
