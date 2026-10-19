@@ -32,7 +32,7 @@ test('browser participant tab, readiness, personal link tracking and resend',{ti
  await expect(host.getByRole('cell',{name:'Ready',exact:true})).toBeVisible();await expect(host.getByRole('cell',{name:'Online',exact:false}).first()).toBeVisible();
  await post('/api/action',{op:'start'},admin);for(let n=0;n<4;n++)await post('/api/action',{op:'next'},admin);await new Promise(r=>setImmediate(r));
  const message=db.prepare("SELECT body FROM outbox WHERE email='browser-monitor@test.example' AND subject LIKE 'Important:%'").get();const url=message.body.match(/http:\/\/localhost:43111\/phishing\?t=[a-f0-9]{64}/)[0];
- await player.goto(url);await player.locator('#claim-upgrade').click();await expect(player.getByRole('heading',{name:'Oops, hello! This was phishing.'})).toBeVisible();
+ await player.goto(url);await expect(player.getByRole('heading',{name:'Oops, hello! This was phishing.'})).toBeVisible();
  await expect.poll(()=>db.prepare('SELECT open_count FROM exercise_tracking').get().open_count).toBe(1);
  await host.reload();await host.locator('[data-view=participants]').first().click();await expect(host.getByRole('cell',{name:/Opened/})).toBeVisible();
  db.exec('UPDATE exercise_tracking SET last_sent_at=last_sent_at-91000');await host.reload();await host.locator('[data-view=participants]').first().click();

@@ -36,7 +36,7 @@ test('browser: live controls, final modal, OK, reconnect, confirmed reset and pu
  const answers=['','RESET FINISHED GAME',app.password];hostPage.on('dialog',d=>d.accept(answers.shift()));
  await hostPage.getByRole('button',{name:'Reset game'}).click();await expect(hostPage.getByRole('button',{name:'Reset game'})).toBeDisabled();
  await page.reload();await expect(page.getByRole('heading',{name:'Final village report'})).toBeVisible();if(await page.locator('#final-report-dialog[open]').count())assert.equal(await page.locator('#final-report-dialog').evaluate(d=>d.scrollTop),0);
- const publicPage=await browser.newPage();await publicPage.goto(app.base+'/phishing');await publicPage.locator('#claim-upgrade').click();
+ const publicPage=await browser.newPage();await publicPage.goto(app.base+'/phishing');
  await expect(publicPage.getByRole('heading',{name:'Oops, hello! This was phishing.'})).toBeVisible();assert.equal(await publicPage.locator('input').count(),0);
  assert.deepEqual(errors,[]);
 });
