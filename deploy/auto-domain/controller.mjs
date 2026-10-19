@@ -42,12 +42,23 @@ export async function publish(origin,cfg,{stateDir=resolve(here,'state'),fetcher
  for(let i=0;i<24;i++){if(await healthy(cfg.publicOrigin,origin,fetcher))return true;await sleep(5000);}
  throw Error('Published, but public verification is still pending.');
 }
+export function wranglerArgs(project){return [resolve(here,'node_modules/wrangler/bin/wrangler.js'),'pages','deploy','public','--project-name',project,'--branch','main','--commit-dirty=true'];}
+export function publicationError(output,token){
+ const safe=output.split(token||'\u0000').join('[REDACTED]').replace(/\x1b\[[0-9;]*m/g,'');
+ const code=safe.match(/\[code:\s*(\d+)\]/i)?.[1];
+ if(/authentication|invalid.*token|unauthorized|10000|9109/i.test(safe))return 'Cloudflare authentication failed. Check the private token and Pages Edit permission.';
+ if(/config.*not support|not support.*config|custom paths/i.test(safe))return 'Publisher configuration was rejected. Update the domain controller.';
+ if(/esbuild|workerd|install script|platform package/i.test(safe))return 'Publisher dependencies are incomplete. Check the isolated Wrangler installation.';
+ return `Cloudflare publication failed${code?' (API code '+code+')':''}. Credentials and provider output are not logged.`;
+}
 export function runWrangler(cwd,cfg){
  return new Promise((ok,no)=>{
-  const child=spawn(process.execPath,[resolve(here,'node_modules/wrangler/bin/wrangler.js'),'pages','deploy','public','--config','wrangler.json','--project-name',cfg.project,'--branch','main','--commit-dirty=true'],{cwd,stdio:'ignore',env:{...process.env,CLOUDFLARE_ACCOUNT_ID:cfg.account,CLOUDFLARE_API_TOKEN:cfg.token,WRANGLER_SEND_METRICS:'false',CI:'true'}});
+  // Pages discovers wrangler.json in cwd; --config is explicitly rejected.
+  const child=spawn(process.execPath,wranglerArgs(cfg.project),{cwd,stdio:['ignore','pipe','pipe'],env:{...process.env,CLOUDFLARE_ACCOUNT_ID:cfg.account,CLOUDFLARE_API_TOKEN:cfg.token,WRANGLER_SEND_METRICS:'false',CI:'true'}});
+  let output='';const capture=x=>{output=(output+x.toString()).slice(-32768);};child.stdout.on('data',capture);child.stderr.on('data',capture);
   const timer=setTimeout(()=>{child.kill('SIGTERM');no(Error('Cloudflare publication timed out.'));},180000);
   child.once('error',()=>{clearTimeout(timer);no(Error('Cannot start the installed Cloudflare publisher.'));});
-  child.once('exit',code=>{clearTimeout(timer);code===0?ok():no(Error('Cloudflare publication failed. Check token permission/expiry and network; credentials are not logged.'));});
+  child.once('exit',code=>{clearTimeout(timer);code===0?ok():no(Error(publicationError(output,cfg.token)));});
  });
 }
 export async function supervise(cfg){
