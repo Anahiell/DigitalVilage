@@ -9,6 +9,7 @@ import {createWorkshopMailer,mailConfiguration} from './mailer.js';
 import {createMailQueue} from './mail-queue.js';
 import {createSessionLifecycle} from './session-lifecycle.js';
 import {createParticipantMonitor} from './participant-monitor.js';
+import {createCouncil} from './council.js';
 import {generateNews,buildRoundReport,campaignReview,buildWorkshopStories} from './game-content.js';
 const ROOT=process.cwd(), HOST=process.env.HOST||'127.0.0.1',PORT=Number(process.env.PORT||3000);
 const ADMIN_PASSWORD=process.env.ADMIN_PASSWORD||'', PIN_PEPPER=process.env.PIN_PEPPER||'';
@@ -100,7 +101,7 @@ CREATE TABLE IF NOT EXISTS outbox (
 );
 `);
 if(!db.prepare('PRAGMA table_info(posts)').all().some(c=>c.name==='credits'))db.exec("ALTER TABLE posts ADD COLUMN credits TEXT NOT NULL DEFAULT ''");
-for(const [column,definition] of [['phase_reason',"TEXT NOT NULL DEFAULT ''"],['phase_changed_at','INTEGER NOT NULL DEFAULT 0'],['phase_revision','INTEGER NOT NULL DEFAULT 0']]){
+for(const [column,definition] of [['phase_reason',"TEXT NOT NULL DEFAULT ''"],['phase_changed_at','INTEGER NOT NULL DEFAULT 0'],['phase_revision','INTEGER NOT NULL DEFAULT 0'],['council_approvals','INTEGER NOT NULL DEFAULT 0']]){
  if(!db.prepare('PRAGMA table_info(game)').all().some(c=>c.name===column))db.exec(`ALTER TABLE game ADD COLUMN ${column} ${definition}`);
 }
 db.exec('CREATE TABLE IF NOT EXISTS exercise_recipients(player_id TEXT PRIMARY KEY)');
@@ -328,6 +329,7 @@ function login(email,pin,res,req){email=clean(email).toLowerCase();pin=clean(pin
  if(!verifyPin(pin,p.pin_hash)){const attempts=p.attempts+1;run('UPDATE players SET attempts=?,locked_until=? WHERE id=?',attempts,attempts>=5?at()+900000:0,p.id);throw httpError(401,'Email or PIN incorrect');}
  run('UPDATE players SET verified=1,attempts=0,locked_until=0,last_seen=? WHERE id=?',at(),p.id);startSession(res,req,p.id,false);return {ok:true};
 }
+const council=createCouncil({db,getGame,sessionId:()=>lifecycle.sessionId(),investments:INVESTMENTS,assets:MEDIA_ASSETS,now:at,log:logEvent,baseline:recordBaseline,error:httpError});
 function currentState(a,knownHistory=0,tokenHash=''){advanceWorld();const g=getGame(),villages=all('SELECT * FROM villages');
  const time=roundElapsed(g);const base={privacyContact:process.env.PRIVACY_CONTACT||'',emailConfigured:emailConfigured(),game:{round:g.round,phase:g.phase,elapsedMs:time,durationMs:(ROUNDS[g.round-1]?.duration||0)*1000,newsRevealed:!!g.news_revealed,mediaRevealed:!!g.media_revealed,crisisFired:!!g.crisis_fired,ticketsFired:!!g.tickets_fired},rounds:ROUNDS,villages:villages.map(v=>({...v,budget:Math.round(v.budget),youth:Math.round(v.youth),trust:Math.round(v.trust)})),investments:INVESTMENTS,roles:ROLES,assets:MEDIA_ASSETS.map(x=>({id:x.id,label:x.label,symbol:x.symbol,kind:x.kind,color:x.color,usage:x.usage,credit:x.credit||'',...(g.media_revealed||a?.admin?{allowed:x.allowed}:{})})),events:all('SELECT * FROM events ORDER BY id DESC LIMIT 24'),slots:all('SELECT village_id,role,verified FROM players').map(p=>({village:p.village_id,role:p.role,verified:!!p.verified}))};
  if(!a)return {...base,restricted:true,archivedReport:lifecycle.read(null,tokenHash)};
@@ -345,6 +347,7 @@ function currentState(a,knownHistory=0,tokenHash=''){advanceWorld();const g=getG
  base.builtInvestments=all('SELECT village_id,investment_id FROM investments');
  base.serverTime=at();
  base.game.sessionId=lifecycle.sessionId();base.crisisControls=all('SELECT * FROM crisis_controls');
+ base.game.councilApprovals=!!g.council_approvals;base.proposals=council.list(person,a.admin);
  Object.assign(base.game,{phaseReason:g.phase_reason,phaseChangedAt:g.phase_changed_at,phaseRevision:g.phase_revision,remainingMs:Math.max(0,base.game.durationMs-time)});
  base.crisisControls=['funding','festival'].map(kind=>{
   const control=base.crisisControls.find(c=>c.kind===kind)||{kind,status:'running',trigger_ms:kind==='funding'?600000:240000,paused_at:0};
@@ -392,6 +395,13 @@ async function doAction(a,body){advanceWorld();const op=clean(body.op),g=getGame
  if(['start','next','pause','resume','closeRound','end'].includes(op)&&body.phaseRevision!==undefined&&body.phaseRevision!==g.phase_revision)throw httpError(409,'The game status changed. Refresh before trying again.');
  if(op==='setReady'){const player=requirePlayer(a);if(g.phase==='ended')throw httpError(409,'This session has ended.');participantMonitor.setReady(player.id,body.ready);return {ok:true};}
  if(op==='acknowledgeReport'){const player=requirePlayer(a);if(g.phase!=='ended')throw httpError(409,'No final report yet.');lifecycle.acknowledge(player.id);return {ok:true};}
+ if(g.council_approvals&&['invest','chooseNews','unchooseNews','publish','approveProposal','rejectProposal'].includes(op))return council.handle(requirePlayer(a),body);
+ if(op==='adjustVillage'){
+  requireAdmin(a);if(g.phase!=='playing')throw httpError(409,'Resume the active round before intervening.');
+  const metric=String(body.metric),limits={budget:250000,youth:100,internet:25,education:25,services:25,jobs:25,trust:25},delta=Number(body.delta);
+  if(!Object.hasOwn(limits,metric)||!Number.isFinite(delta)||!Number.isInteger(delta)||!delta||Math.abs(delta)>limits[metric]||!VILLAGES.some(v=>v.id===body.village))throw httpError(400,'Choose a village, metric and non-zero whole-number adjustment within the shown limit.');
+  tx(()=>{const before=row('SELECT * FROM villages WHERE id=?',body.village)[metric],after=Math.max(metric==='youth'?25:0,Math.min(['budget','youth'].includes(metric)?Number.MAX_SAFE_INTEGER:100,before+delta));run(`UPDATE villages SET ${metric}=? WHERE id=?`,after,body.village);logEvent(g.round,body.village,'intervention','Host intervention',`${metric}: ${Math.round(before)} → ${Math.round(after)} (${delta>0?'+':''}${delta} requested).`);recordBaseline(g.round);});return {ok:true,message:'Host adjustment applied and recorded in the village history.'};
+ }
  if(['pauseCrisis','resumeCrisis','cancelCrisis'].includes(op)){
   requireAdmin(a);if(!['playing','paused'].includes(g.phase)||![1,4].includes(g.round))throw httpError(409,'No open crisis in this round.');
   const kind=g.round===1?'funding':'festival',elapsed=roundElapsed(g),control=row('SELECT * FROM crisis_controls WHERE kind=?',kind),status=control?.status||'running';
@@ -439,6 +449,7 @@ async function doAction(a,body){advanceWorld();const op=clean(body.op),g=getGame
    if(op==='next'&&(g.round<1||g.round>=5))throw httpError(409,'Cannot advance the game');
    const next=g.round+1,now=at();
    tx(()=>{
+    if(op==='start')run('UPDATE game SET council_approvals=? WHERE id=1',body.councilApprovals===true?1:0);
     if(g.round)closeRound('advanced',now);
     run("UPDATE game SET round=?,phase='playing',started_at=?,elapsed_ms=0,last_sim_at=?,crisis_fired=0,tickets_fired=0,last_dynamic_event_at=?,phase_reason='',phase_changed_at=?,phase_revision=phase_revision+1 WHERE id=1",next,now,now,now,now);
     recordRoundStart(next,now);

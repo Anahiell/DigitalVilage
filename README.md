@@ -6,6 +6,8 @@ A mobile-first multiplayer teaching simulation for the RURALEM / Erasmus+ Digita
 
 For the existing `digitvillage-play.pages.dev` address, [optional free domain automation](deploy/auto-domain/README.md) starts the game tunnel after reboot and updates the gateway without changing the QR. It requires one private, account-scoped Cloudflare Pages API token entered on the Pi.
 
+The updated host UI starts new workshops with [mayor-approved council decisions](docs/council-live.md), a separate player briefing/current-round screen, stable live DOM updates and a vertical phone festival board. Existing sessions keep their original decision policy until the next workshop.
+
 ## Implemented experience
 
 | Round | What participants do | What changes |

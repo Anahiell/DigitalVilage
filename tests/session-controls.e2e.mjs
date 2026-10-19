@@ -26,7 +26,7 @@ test('browser: global pause/resume, player explanation, permanent end, final OK 
  await host.getByRole('button',{name:'Ⅱ Pause game',exact:true}).click();
  await expect(host.locator('#session-status')).toContainText('The host paused the entire game');
  await expect(host.getByRole('button',{name:'▶ Resume game',exact:true})).toBeVisible();
- await expect(host.locator('[data-action=shock]')).toHaveCount(0);
+ await expect(host.locator('[data-action=shock]')).toBeDisabled();
  await expect(host.locator('#grant-form button')).toBeDisabled();
  await player.reload();await expect(player.getByText(/The host paused the entire game/)).toBeVisible();
  assert.ok(await player.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'Mobile screen must not overflow horizontally');

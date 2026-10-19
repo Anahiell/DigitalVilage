@@ -1,6 +1,48 @@
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const num=value=>Math.round(value||0).toLocaleString('en-US');
 const money=value=>'€'+num(value);
+
+// Reconcile existing nodes rather than replacing the screen on every poll.
+// Stable details, forms and cards retain focus, selection and scroll position.
+export function updateScreen(root,html){
+ const template=document.createElement('template');template.innerHTML=html;
+ const key=n=>n.nodeType===1&&(n.id||n.dataset.domKey||n.dataset.key||n.dataset.taskId||n.dataset.screen||n.dataset.action&&`${n.dataset.action}:${n.dataset.id||''}:${n.dataset.answer||''}`||n.dataset.view&&`view:${n.dataset.view}`);
+ const same=(a,b)=>a.nodeType===b.nodeType&&(a.nodeType!==1||a.tagName===b.tagName)&&key(a)===key(b);
+ function patch(old,next){
+  if(old.nodeType===3){if(old.data!==next.data)old.data=next.data;return;}
+  if(old.nodeType!==1)return;
+  const focused=old===document.activeElement,details=old.tagName==='DETAILS';
+  const priorNumber=old.getAttribute('data-number');
+  for(const a of [...old.attributes])if(!next.hasAttribute(a.name)&&!(details&&a.name==='open')&&!(focused&&a.name==='value'))old.removeAttribute(a.name);
+  for(const a of next.attributes)if(!(details&&a.name==='open')&&!(focused&&a.name==='value')&&old.getAttribute(a.name)!==a.value)old.setAttribute(a.name,a.value);
+  if(old.tagName==='INPUT'){if(!focused&&next.hasAttribute('value')&&old.value!==next.value)old.value=next.value;if(next.type==='checkbox')old.checked=next.checked;return;}
+  if(old.tagName==='TEXTAREA'){if(!focused&&old.value!==next.value)old.value=next.value;return;}
+  if(focused&&old.tagName==='SELECT')return;
+  if(next.hasAttribute('data-number')&&priorNumber!==null&&priorNumber!==next.getAttribute('data-number')){
+   animateNumber(old,Number(priorNumber),Number(next.getAttribute('data-number')),next.getAttribute('data-format'));return;
+  }
+  children(old,next);
+  if(old.tagName==='SELECT')old.value=next.value;
+ }
+ function children(parent,next){
+  let cursor=parent.firstChild;
+  for(const desired of [...next.childNodes]){
+   let match=cursor&&same(cursor,desired)?cursor:null;
+   if(!match)for(let candidate=cursor;candidate;candidate=candidate.nextSibling)if(same(candidate,desired)){match=candidate;break;}
+   if(match){if(match!==cursor)parent.insertBefore(match,cursor);patch(match,desired);cursor=match.nextSibling;}
+   else {parent.insertBefore(desired.cloneNode(true),cursor);}
+  }
+  while(cursor){const next=cursor.nextSibling;cursor.remove();cursor=next;}
+ }
+ children(root,template.content);
+}
+const numberAnimations=new WeakMap();
+function animateNumber(node,from,to,format){
+ const previous=numberAnimations.get(node);if(previous)cancelAnimationFrame(previous);
+ const text=n=>(format==='money'?'€':'')+Math.round(n).toLocaleString('en-US')+(format==='percent'?'%':'');
+ if(matchMedia('(prefers-reduced-motion: reduce)').matches){node.textContent=text(to);return;}
+ const start=performance.now();function step(now){if(!node.isConnected)return;const p=Math.min(1,(now-start)/450);node.textContent=text(from+(to-from)*(1-(1-p)**3));if(p<1)numberAnimations.set(node,requestAnimationFrame(step));else numberAnimations.delete(node);}numberAnimations.set(node,requestAnimationFrame(step));
+}
 const change=value=>value==null?'—':`${value>=0?'+':''}${Number(value.toFixed(1)).toLocaleString('en-US')}`;
 export function renderRoundReport(report,{villageId,compact=false,overallStory=''}={}){
  if(!report)return '<section class="tile panel"><h2>No saved round report yet</h2><p class="muted">Reports appear when a round closes. The current round is still open.</p></section>';
